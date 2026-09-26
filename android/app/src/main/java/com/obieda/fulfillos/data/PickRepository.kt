@@ -39,12 +39,45 @@ class PickRepository(
             productId = productId,
             qty = qty,
             barcode = barcode,
+            kind = PendingPickEvent.Kind.PICK,
+            reason = null,
             createdAtEpochMs = System.currentTimeMillis(),
             state = PendingPickEvent.State.PENDING,
         )
         events.persistBeforeNetwork(event)
         if (connectivity.state != ConnectivityState.ONLINE) {
             onResult(PickSyncResult.Queued(event.eventId, "Offline • scan safely queued"))
+            return
+        }
+        flush(taskId, onResult)
+    }
+
+    fun createShort(
+        taskId: String,
+        taskItemId: String,
+        locationId: String,
+        productId: String,
+        qty: Int = 1,
+        reason: String = "MISSING_AT_LOCATION",
+        onResult: (PickSyncResult) -> Unit,
+    ) {
+        val event = PendingPickEvent(
+            eventId = UUID.randomUUID().toString(),
+            taskId = taskId,
+            clientSeq = events.nextClientSeq(taskId),
+            taskItemId = taskItemId,
+            locationId = locationId,
+            productId = productId,
+            qty = qty,
+            barcode = null,
+            kind = PendingPickEvent.Kind.SHORT,
+            reason = reason,
+            createdAtEpochMs = System.currentTimeMillis(),
+            state = PendingPickEvent.State.PENDING,
+        )
+        events.persistBeforeNetwork(event)
+        if (connectivity.state != ConnectivityState.ONLINE) {
+            onResult(PickSyncResult.Queued(event.eventId, "Offline • shortage safely queued"))
             return
         }
         flush(taskId, onResult)
