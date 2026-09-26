@@ -13,7 +13,6 @@ from .location_parser import is_compatible, parse_location
 from .models import (
     Associate,
     Barcode,
-    DowntimeEvent,
     InventoryBalance,
     InventoryMovement,
     Location,
