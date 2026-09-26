@@ -58,6 +58,10 @@ class TaskOfferRequest(BaseModel):
     device_id: str
 
 
+class RejectOfferRequest(BaseModel):
+    reason: str = "ASSOCIATE_REJECTED"
+
+
 class PickScanRequest(BaseModel):
     event_id: str
     client_seq: int = Field(gt=0)
