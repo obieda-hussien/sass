@@ -78,3 +78,45 @@ data class InventoryLookup(
 enum class ConnectivityState { ONLINE, OFFLINE, RECONNECTING }
 enum class AppScreen { HOME, PICK, INVENTORY }
 enum class PickScanPhase { BIN, ITEM, SYNCING, DONE }
+
+
+data class PendingOperationEvent(
+    val eventId: String,
+    val kind: Kind,
+    val resourceId: String?,
+    val productId: String,
+    val qty: Int,
+    val sourceLocationId: String?,
+    val destinationLocationId: String?,
+    val reason: String?,
+    val createdAtEpochMs: Long,
+    val state: State,
+) {
+    enum class Kind { UNPACK_SCAN, BOH_MOVE, DAMAGE, RECOVERY_STOW }
+    enum class State { PENDING, SENDING, ACKED, REJECTED }
+}
+
+data class UnpackItemRecommendation(
+    val productId: String,
+    val qty: Int,
+    val compatibleDestinations: List<String>,
+)
+
+data class UnpackSummary(
+    val sessionId: String,
+    val status: String,
+    val temperatureClass: String,
+    val toteLocationId: String,
+    val items: List<UnpackItemRecommendation>,
+)
+
+data class BarcodeProduct(
+    val barcode: String,
+    val productId: String,
+    val asin: String,
+    val title: String,
+    val temperatureClass: String,
+    val handlingClass: String,
+)
+
+enum class OperationMode { UNPACK, BOH, DAMAGE }
