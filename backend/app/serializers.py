@@ -31,9 +31,9 @@ def task_dict(task: Task) -> dict:
         "state": task.state,
         "version": task.version,
         "associateId": task.associate_id,
-        "offeredAt": task.offered_at,
-        "acceptedAt": task.accepted_at,
-        "completedAt": task.completed_at,
+        "offeredAt": task.offered_at.isoformat() if task.offered_at else None,
+        "acceptedAt": task.accepted_at.isoformat() if task.accepted_at else None,
+        "completedAt": task.completed_at.isoformat() if task.completed_at else None,
         "cancelReason": task.cancel_reason,
         "recoveryReason": task.recovery_reason,
         "lines": [
