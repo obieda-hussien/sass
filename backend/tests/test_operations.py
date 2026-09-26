@@ -2,7 +2,7 @@ from sqlalchemy import select
 
 from app.models import InventoryBalance, Product, User, Device
 from app.services.operations import (
-    OperationError, apply_cycle_count, boh_move, complete_unpack, damage_move,
+    OperationError, active_unpack, apply_cycle_count, boh_move, complete_unpack, damage_move,
     record_cycle_count, scan_unpack, start_cycle_count, start_unpack,
 )
 
@@ -104,3 +104,26 @@ def test_cycle_count_adjustment_is_auditable_inventory_movement(db):
         InventoryBalance.location_id == "P-1-A101A110",
     ))
     assert bal.qty_on_hand == counted
+
+
+
+def test_unpack_start_is_retry_safe_and_resumable(db):
+    user, device = actor(db)
+    first = start_unpack(db, "AMBIENT", user.id, device.id)
+    db.commit()
+    first_id = first.id
+
+    second = start_unpack(db, "ambient", user.id, device.id)
+    db.commit()
+    assert second.id == first_id
+
+    resumed = active_unpack(db, user.id, device.id, "AMBIENT")
+    assert resumed is not None
+    assert resumed.id == first_id
+    assert resumed.tote_location_id == "TSCRET001"
+
+    complete_unpack(db, resumed)
+    db.commit()
+    third = start_unpack(db, "AMBIENT", user.id, device.id)
+    db.commit()
+    assert third.id != first_id
