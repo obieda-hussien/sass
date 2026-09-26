@@ -1,3 +1,4 @@
+# bootstrap revision: verified split payload
 name: Bootstrap FulfillOS source
 
 on:
@@ -26,9 +27,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          cat             bootstrap/part-00.b64             bootstrap/part-01.b64             bootstrap/part-02.b64             bootstrap/part-03.b64             bootstrap/part-04.b64             bootstrap/fix05-0.b64             bootstrap/fix05-1.b64             bootstrap/part-06.b64             bootstrap/part-07.b64             bootstrap/part-08.b64             bootstrap/part-09.b64             bootstrap/part-10.b64             bootstrap/fix11-0.b64             bootstrap/fix11-1.b64             > /tmp/fulfillos.b64
-
+          cat bootstrap/part-00.b64 bootstrap/part-01.b64 bootstrap/part-02.b64 bootstrap/part-03.b64 bootstrap/part-04.b64 bootstrap/fix05-0.b64 bootstrap/fix05-1.b64 bootstrap/part-06.b64 bootstrap/part-07.b64 bootstrap/part-08.b64 bootstrap/part-09.b64 bootstrap/part-10.b64 bootstrap/fix11-0.b64 bootstrap/fix11-1.b64 > /tmp/fulfillos.b64
           test "$(wc -c < /tmp/fulfillos.b64)" -eq 95564
           base64 --decode /tmp/fulfillos.b64 > /tmp/fulfillos.zip
           unzip -t /tmp/fulfillos.zip
