@@ -5,7 +5,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.obieda.fulfillos.domain.PendingPickEvent
 
-class PendingEventStore(context: Context) : SQLiteOpenHelper(context, "fulfillos_events.db", null, 1) {
+class PendingEventStore(context: Context) : SQLiteOpenHelper(context, "fulfillos_events.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -18,6 +18,8 @@ class PendingEventStore(context: Context) : SQLiteOpenHelper(context, "fulfillos
                 product_id TEXT NOT NULL,
                 qty INTEGER NOT NULL,
                 barcode TEXT,
+                event_kind TEXT NOT NULL DEFAULT 'PICK',
+                reason TEXT,
                 created_ms INTEGER NOT NULL,
                 state TEXT NOT NULL
             )
@@ -26,16 +28,21 @@ class PendingEventStore(context: Context) : SQLiteOpenHelper(context, "fulfillos
         db.execSQL("CREATE UNIQUE INDEX idx_task_seq ON pending_pick_event(task_id, client_seq)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE pending_pick_event ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'PICK'")
+            db.execSQL("ALTER TABLE pending_pick_event ADD COLUMN reason TEXT")
+        }
+    }
 
     @Synchronized
     fun persistBeforeNetwork(event: PendingPickEvent) {
         writableDatabase.execSQL(
             """INSERT OR IGNORE INTO pending_pick_event
-            (event_id,task_id,client_seq,task_item_id,location_id,product_id,qty,barcode,created_ms,state)
-            VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (event_id,task_id,client_seq,task_item_id,location_id,product_id,qty,barcode,event_kind,reason,created_ms,state)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             arrayOf<Any?>(event.eventId, event.taskId, event.clientSeq, event.taskItemId, event.locationId,
-                event.productId, event.qty, event.barcode, event.createdAtEpochMs, event.state.name)
+                event.productId, event.qty, event.barcode, event.kind.name, event.reason, event.createdAtEpochMs, event.state.name)
         )
     }
 
@@ -61,6 +68,8 @@ class PendingEventStore(context: Context) : SQLiteOpenHelper(context, "fulfillos
                         productId = it.getString(it.getColumnIndexOrThrow("product_id")),
                         qty = it.getInt(it.getColumnIndexOrThrow("qty")),
                         barcode = it.getString(it.getColumnIndexOrThrow("barcode")),
+                        kind = PendingPickEvent.Kind.valueOf(it.getString(it.getColumnIndexOrThrow("event_kind"))),
+                        reason = it.getString(it.getColumnIndexOrThrow("reason")),
                         createdAtEpochMs = it.getLong(it.getColumnIndexOrThrow("created_ms")),
                         state = PendingPickEvent.State.valueOf(it.getString(it.getColumnIndexOrThrow("state"))),
                     ))
