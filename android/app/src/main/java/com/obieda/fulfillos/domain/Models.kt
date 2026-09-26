@@ -33,6 +33,8 @@ data class TaskSnapshot(
     val clientHighWaterSeq: Long,
     val expectedUnits: Int,
     val pickedUnits: Int,
+    val shortedUnits: Int,
+    val processedUnits: Int,
     val remainingUnits: Int,
     val recoveryRequired: Boolean,
     val offerExpiresAt: String? = null,
@@ -51,9 +53,12 @@ data class PendingPickEvent(
     val productId: String,
     val qty: Int,
     val barcode: String?,
+    val kind: Kind,
+    val reason: String?,
     val createdAtEpochMs: Long,
     val state: State,
 ) {
+    enum class Kind { PICK, SHORT }
     enum class State { PENDING, SENDING, ACKED, REJECTED }
 }
 
