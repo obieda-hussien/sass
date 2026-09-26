@@ -6,6 +6,7 @@ import com.obieda.fulfillos.BuildConfig
 
 class AppGraph(context: Context) {
     val events = PendingEventStore(context)
+    val operationEvents = PendingOperationStore(context)
     val secureSession = SecureSessionStore(context)
     val api = ApiClient()
     val connectivity = ConnectivityMonitor(context)
@@ -25,4 +26,5 @@ class AppGraph(context: Context) {
     )
 
     val picks = PickRepository(events, api, connectivity, sessions)
+    val operations = OperationsRepository(operationEvents, api, connectivity, sessions)
 }
