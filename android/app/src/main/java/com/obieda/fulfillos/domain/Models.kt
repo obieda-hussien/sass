@@ -76,7 +76,7 @@ data class InventoryLookup(
 )
 
 enum class ConnectivityState { ONLINE, OFFLINE, RECONNECTING }
-enum class AppScreen { HOME, PICK, INVENTORY }
+enum class AppScreen { HOME, PICK, INVENTORY, UNPACK, BOH, DAMAGE }
 enum class PickScanPhase { BIN, ITEM, SYNCING, DONE }
 
 
@@ -120,3 +120,4 @@ data class BarcodeProduct(
 )
 
 enum class OperationMode { UNPACK, BOH, DAMAGE }
+enum class OperationScanPhase { SOURCE, ITEM, DESTINATION, SYNCING }
