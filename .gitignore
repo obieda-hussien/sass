@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.db
+
+# Android / Gradle
+.gradle/
+build/
+**/build/
+local.properties
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.jks
+*.keystore

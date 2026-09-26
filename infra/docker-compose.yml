@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: fulfillos
+      POSTGRES_PASSWORD: fulfillos
+      POSTGRES_DB: fulfillos
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fulfillos"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    ports: ["6379:6379"]
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js"]
+    ports: ["4222:4222", "8222:8222"]
+
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://fulfillos:fulfillos@postgres:5432/fulfillos
+      DEMO_SEED: "1"
+    ports: ["8080:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
