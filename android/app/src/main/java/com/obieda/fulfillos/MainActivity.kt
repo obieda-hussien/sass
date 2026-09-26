@@ -329,12 +329,15 @@ private fun secondsRemaining(expiresAt: String?): Int {
 @Composable
 private fun ActivePickPanel(task: TaskSnapshot, vm: AppViewModel) {
     val item = task.currentItem
-    val progress = if (task.expectedUnits <= 0) 0f else task.pickedUnits.toFloat() / task.expectedUnits.toFloat()
+    val progress = if (task.expectedUnits <= 0) 0f else task.processedUnits.toFloat() / task.expectedUnits.toFloat()
 
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Order ${task.orderId.take(10)}…", style = MaterialTheme.typography.labelLarge)
-            Text("${task.pickedUnits}/${task.expectedUnits} units", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("${task.processedUnits}/${task.expectedUnits} processed", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            if (task.shortedUnits > 0) {
+                Text("Picked ${task.pickedUnits} • Short ${task.shortedUnits}", style = MaterialTheme.typography.bodySmall)
+            }
         }
         Text("v${task.serverVersion}", style = MaterialTheme.typography.labelMedium)
     }
@@ -370,6 +373,11 @@ private fun ActivePickPanel(task: TaskSnapshot, vm: AppViewModel) {
                 PickScanPhase.DONE -> "COMPLETE"
             }
             Text(prompt, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+            if (vm.scanPhase == PickScanPhase.ITEM) {
+                OutlinedButton(onClick = { vm.shortCurrent() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Not found • Short 1")
+                }
+            }
             if (vm.scannedValue.isNotBlank()) {
                 Text("Last scan: ${vm.scannedValue}", style = MaterialTheme.typography.bodySmall)
             }
@@ -439,7 +447,7 @@ private fun InventoryScreen(vm: AppViewModel) {
             TextButton(onClick = vm::goHome) { Text("Home") }
             Text("Inventory Viewer", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
-        Text("Scan a bin or enter an ASIN. Location → products and product → locations are both supported.")
+        Text("Scan a bin or item barcode, or enter an ASIN. Product → locations and location → products are both supported.")
         OutlinedTextField(
             value = vm.inventoryQuery,
             onValueChange = { vm.inventoryQuery = it },
