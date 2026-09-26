@@ -17,6 +17,8 @@ class FulfillmentError(Exception):
 
 
 def start_pack_rack(db: Session, task: PickTask, user_id: str, device_id: str) -> dict:
+    if task.status == TaskStatus.PACK_RACK.value:
+        return task_snapshot(db, task)
     if task.status != TaskStatus.PICKED.value:
         raise FulfillmentError(f"Task must be PICKED, got {task.status}", "INVALID_STATE")
     order = db.get(Order, task.order_id)
@@ -29,11 +31,15 @@ def start_pack_rack(db: Session, task: PickTask, user_id: str, device_id: str) -
 
 
 def stage_task(db: Session, task: PickTask, stage_location_id: str, user_id: str, device_id: str) -> dict:
+    stage = f"STAGE:{stage_location_id.strip().upper()}"
+    if task.status == TaskStatus.STAGED.value:
+        if task.stage_location_id == stage:
+            return task_snapshot(db, task)
+        raise FulfillmentError("Task is already staged at another location", "STAGE_MISMATCH")
     if task.status not in {TaskStatus.PICKED.value, TaskStatus.PACK_RACK.value}:
         raise FulfillmentError(f"Task cannot be staged from {task.status}", "INVALID_STATE")
     order = db.get(Order, task.order_id)
     source = f"PICKTOTE:{order.id}"
-    stage = f"STAGE:{stage_location_id.strip().upper()}"
     ensure_virtual_location(db, stage)
 
     balances = db.scalars(select(InventoryBalance).where(
@@ -66,12 +72,17 @@ def stage_task(db: Session, task: PickTask, stage_location_id: str, user_id: str
 
 
 def handoff_task(db: Session, task: PickTask, handoff_ref: str, user_id: str, device_id: str) -> dict:
+    normalized_handoff = handoff_ref.strip().upper()
+    if task.status == TaskStatus.HANDED_OFF.value:
+        if (task.handoff_ref or "").strip().upper() == normalized_handoff:
+            return task_snapshot(db, task)
+        raise FulfillmentError("Task was handed off to another reference", "HANDOFF_MISMATCH")
     if task.status not in {TaskStatus.STAGED.value, TaskStatus.HANDOFF_READY.value}:
         raise FulfillmentError(f"Task cannot hand off from {task.status}", "INVALID_STATE")
     if not task.stage_location_id:
         raise FulfillmentError("Task has no stage location", "MISSING_STAGE")
     order = db.get(Order, task.order_id)
-    destination = f"HANDOFF:{handoff_ref.strip().upper()}"
+    destination = f"HANDOFF:{normalized_handoff}"
     ensure_virtual_location(db, destination)
     balances = db.scalars(select(InventoryBalance).where(
         InventoryBalance.location_id == task.stage_location_id,
@@ -101,6 +112,8 @@ def handoff_task(db: Session, task: PickTask, handoff_ref: str, user_id: str, de
 
 
 def complete_delivery(db: Session, task: PickTask, user_id: str | None = None, device_id: str | None = None) -> dict:
+    if task.status == TaskStatus.COMPLETED.value:
+        return task_snapshot(db, task)
     if task.status != TaskStatus.HANDED_OFF.value:
         raise FulfillmentError(f"Task cannot complete from {task.status}", "INVALID_STATE")
     order = db.get(Order, task.order_id)
