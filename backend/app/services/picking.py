@@ -70,6 +70,9 @@ def task_snapshot(db: Session, task: PickTask) -> dict:
         .order_by(PickTaskItem.sequence)
     ).all()
     order = db.get(Order, task.order_id)
+    lines = db.scalars(select(OrderLine).where(OrderLine.order_id == task.order_id)).all()
+    shorted_units = sum(line.shorted_qty for line in lines)
+    picked_units = sum(item.picked_qty for item in items)
 
     item_payloads = []
     for item in items:
