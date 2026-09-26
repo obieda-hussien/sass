@@ -19,7 +19,7 @@ from .models import (
 from .schemas import (
     BOHMoveRequest, CancelRequest, CycleCountApplyRequest, CycleCountLineRequest, CycleCountStartRequest,
     DamageRequest, DowntimeRequest, HeartbeatRequest, InventoryMoveRequest, LoginRequest, OrderCreate,
-    HandoffRequest, PickScanRequest, ReceiveRequest, RefreshRequest, StageRequest, SyncBatchRequest,
+    HandoffRequest, PickScanRequest, ReceiveRequest, RefreshRequest, RejectOfferRequest, StageRequest, SyncBatchRequest,
     TaskOfferRequest, UnpackScanRequest, UnpackStartRequest,
 )
 from .security import authenticate_access, issue_session, refresh_session, verify_password
@@ -27,6 +27,7 @@ from .seed import ensure_location, seed_demo
 from .services.allocation import AllocationError, allocate_order
 from .services.inventory import InventoryError, move_inventory
 from .services.picking import PickError, accept_task, cancel_order, commit_pick, task_snapshot
+from .services.scheduling import active_task_for_actor, claim_next_task, reject_offer
 from .services.operations import (
     OperationError, apply_cycle_count, boh_move, complete_unpack, damage_move, record_cycle_count,
     scan_unpack, start_cycle_count, start_unpack, unpack_summary,
@@ -133,7 +134,39 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
         device.last_user_id = user.id
         device.status = req.connectivity
         device.app_version = req.app_version or device.app_version
-    return {"ok": True, "server_time": datetime.now(timezone.utc).isoformat(), "current_task_id": req.current_task_id}
+        active = active_task_for_actor(db, user.id, device.id)
+        current_task_id = active.id if active else None
+    return {
+        "ok": True,
+        "server_time": datetime.now(timezone.utc).isoformat(),
+        "current_task_id": current_task_id,
+        "client_reported_task_id": req.current_task_id,
+        "task_mismatch": bool(req.current_task_id and req.current_task_id != current_task_id),
+    }
+
+
+@app.get("/me")
+def me(who=Depends(actor)):
+    user, device = who
+    return {
+        "user_id": user.id, "username": user.username, "role": user.role,
+        "device_id": device.id, "device_status": device.status, "trusted": device.trusted,
+    }
+
+
+@app.get("/me/active-task")
+def my_active_task(who=Depends(actor), db: Session = Depends(get_db)):
+    user, device = who
+    task = active_task_for_actor(db, user.id, device.id)
+    return {"task": task_snapshot(db, task) if task else None}
+
+
+@app.post("/tasks/claim-next")
+def claim_next(who=Depends(actor), db: Session = Depends(get_db)):
+    user, device = who
+    with db.begin():
+        task = claim_next_task(db, user.id, device.id)
+        return {"task": task}
 
 
 @app.get("/locations/parse/{location_id:path}")
@@ -248,6 +281,19 @@ def offer(task_id: str, req: TaskOfferRequest, who=Depends(actor), db: Session =
         order = db.get(Order, task.order_id)
         order.status = OrderStatus.OFFERED.value
         return task_snapshot(db, task)
+
+
+@app.post("/tasks/{task_id}/reject")
+def reject(task_id: str, req: RejectOfferRequest, who=Depends(actor), db: Session = Depends(get_db)):
+    user, device = who
+    try:
+        with db.begin():
+            task = db.get(PickTask, task_id)
+            if not task:
+                raise HTTPException(404, "Task not found")
+            return reject_offer(db, task, user.id, device.id, req.reason)
+    except PickError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
 
 
 @app.post("/tasks/{task_id}/accept")
