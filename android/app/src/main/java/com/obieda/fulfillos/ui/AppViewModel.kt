@@ -250,6 +250,27 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         }
     }
 
+    fun shortCurrent(reason: String = "MISSING_AT_LOCATION") {
+        val task = currentTask ?: return
+        val item = task.currentItem ?: return
+        if (scanPhase != PickScanPhase.ITEM || busy) {
+            message = "Confirm the bin before reporting a shortage"
+            return
+        }
+        submittingItemId = item.id
+        scanPhase = PickScanPhase.SYNCING
+        message = "Short persisted • awaiting server ACK"
+        graph.picks.createShort(
+            taskId = task.taskId,
+            taskItemId = item.id,
+            locationId = item.locationId,
+            productId = item.productId,
+            qty = 1,
+            reason = reason,
+            onResult = ::handlePickSync,
+        )
+    }
+
     fun retryPending() {
         val id = currentTask?.taskId ?: return
         if (connectivity != ConnectivityState.ONLINE) {
@@ -271,9 +292,13 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 value.startsWith("TSCRET") ||
                 value == "DMG" ||
                 value == "SPECIAL"
+            val barcodeLike = !locationLike && value.all(Char::isDigit)
             val response = callWithRefresh {
-                if (locationLike) graph.api.inventoryByLocation(value)
-                else graph.api.inventoryByProduct(value)
+                when {
+                    locationLike -> graph.api.inventoryByLocation(value)
+                    barcodeLike -> graph.api.inventoryByBarcode(value)
+                    else -> graph.api.inventoryByProduct(value)
+                }
             }
             val parsed = if (response.ok) runCatching {
                 if (locationLike) graph.api.parseInventoryLocation(response.body)
@@ -289,11 +314,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     expireSession()
                 } else {
                     inventoryResult = null
-                    errorMessage = if (!locationLike && value.all(Char::isDigit)) {
-                        "Barcode lookup is not exposed yet • scan a bin or enter an ASIN"
-                    } else {
-                        "Inventory lookup failed (${response.code})"
-                    }
+                    errorMessage = "Inventory lookup failed (${response.code})"
                 }
             }
         }
