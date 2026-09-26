@@ -3,10 +3,14 @@ package com.obieda.fulfillos.data
 import com.obieda.fulfillos.BuildConfig
 import com.obieda.fulfillos.domain.InventoryLookup
 import com.obieda.fulfillos.domain.InventoryRow
+import com.obieda.fulfillos.domain.BarcodeProduct
+import com.obieda.fulfillos.domain.PendingOperationEvent
 import com.obieda.fulfillos.domain.PendingPickEvent
 import com.obieda.fulfillos.domain.SessionInfo
 import com.obieda.fulfillos.domain.TaskItem
 import com.obieda.fulfillos.domain.TaskSnapshot
+import com.obieda.fulfillos.domain.UnpackItemRecommendation
+import com.obieda.fulfillos.domain.UnpackSummary
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -83,6 +87,90 @@ class ApiClient {
 
     fun inventoryByBarcode(barcode: String): Result =
         request("/inventory/barcode/${encode(barcode)}", null, "GET")
+
+    fun getActiveUnpack(temperatureClass: String? = null): Result {
+        val suffix = temperatureClass?.let { "?temperature_class=${encode(it)}" }.orEmpty()
+        return request("/unpack/active$suffix", null, "GET")
+    }
+
+    fun startUnpack(temperatureClass: String): Result =
+        request(
+            "/unpack/sessions",
+            JSONObject().put("temperature_class", temperatureClass).toString(),
+        )
+
+    fun getUnpack(sessionId: String): Result =
+        request("/unpack/sessions/${encode(sessionId)}", null, "GET")
+
+    fun completeUnpack(sessionId: String): Result =
+        request("/unpack/sessions/${encode(sessionId)}/complete", "{}")
+
+    fun postOperation(event: PendingOperationEvent): Result {
+        val json = JSONObject()
+            .put("event_id", event.eventId)
+            .put("product_id", event.productId)
+            .put("qty", event.qty)
+
+        return when (event.kind) {
+            PendingOperationEvent.Kind.UNPACK_SCAN -> {
+                val sessionId = requireNotNull(event.resourceId) { "UNPACK_SCAN requires session id" }
+                request("/unpack/sessions/${encode(sessionId)}/scan", json.toString())
+            }
+            PendingOperationEvent.Kind.BOH_MOVE -> {
+                json.put("source_location_id", event.sourceLocationId)
+                    .put("destination_location_id", event.destinationLocationId)
+                request("/boh/move", json.toString())
+            }
+            PendingOperationEvent.Kind.DAMAGE -> {
+                json.put("source_location_id", event.sourceLocationId)
+                    .put("reason", event.reason ?: "DAMAGED")
+                request("/damage", json.toString())
+            }
+            PendingOperationEvent.Kind.RECOVERY_STOW -> {
+                val taskId = requireNotNull(event.resourceId) { "RECOVERY_STOW requires task id" }
+                json.put("destination_location_id", event.destinationLocationId)
+                request("/tasks/${encode(taskId)}/recovery/stow", json.toString())
+            }
+        }
+    }
+
+    fun parseBarcodeProduct(body: String): BarcodeProduct {
+        val root = JSONObject(body)
+        val product = root.getJSONObject("product")
+        return BarcodeProduct(
+            barcode = root.getString("barcode"),
+            productId = product.getString("id"),
+            asin = product.getString("asin"),
+            title = product.getString("title"),
+            temperatureClass = product.getString("temperature_class"),
+            handlingClass = product.getString("handling_class"),
+        )
+    }
+
+    fun parseActiveUnpack(body: String): UnpackSummary? {
+        val root = JSONObject(body)
+        if (!root.has("session") || root.isNull("session")) return null
+        return parseUnpack(root.getJSONObject("session"))
+    }
+
+    fun parseUnpack(body: String): UnpackSummary = parseUnpack(JSONObject(body))
+
+    private fun parseUnpack(o: JSONObject): UnpackSummary {
+        val items = o.optJSONArray("items")?.mapObjects { item ->
+            UnpackItemRecommendation(
+                productId = item.getString("product_id"),
+                qty = item.getInt("qty"),
+                compatibleDestinations = item.optJSONArray("compatible_destinations")?.strings().orEmpty(),
+            )
+        }.orEmpty()
+        return UnpackSummary(
+            sessionId = o.getString("session_id"),
+            status = o.getString("status"),
+            temperatureClass = o.getString("temperature_class"),
+            toteLocationId = o.getString("tote_location_id"),
+            items = items,
+        )
+    }
 
     fun parseSession(body: String): SessionInfo {
         val o = JSONObject(body)
