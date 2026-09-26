@@ -31,7 +31,7 @@ from .services.picking import (
 )
 from .services.scheduling import active_task_for_actor, claim_next_task, reject_offer
 from .services.operations import (
-    OperationError, apply_cycle_count, boh_move, complete_unpack, damage_move, record_cycle_count,
+    OperationError, active_unpack, apply_cycle_count, boh_move, complete_unpack, damage_move, record_cycle_count,
     scan_unpack, start_cycle_count, start_unpack, unpack_summary,
 )
 from .services.sla import board_target_seconds, effective_elapsed_seconds
@@ -563,6 +563,13 @@ def task_complete(task_id: str, who=Depends(actor), db: Session = Depends(get_db
             return complete_delivery(db, task, user.id, device.id)
     except FulfillmentError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.get("/unpack/active")
+def unpack_active(temperature_class: str | None = None, who=Depends(actor), db: Session = Depends(get_db)):
+    user, device = who
+    session = active_unpack(db, user.id, device.id, temperature_class)
+    return {"session": unpack_summary(db, session) if session else None}
 
 
 @app.post("/unpack/sessions")
