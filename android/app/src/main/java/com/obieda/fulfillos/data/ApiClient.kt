@@ -59,12 +59,20 @@ class ApiClient {
             .put("event_id", event.eventId)
             .put("client_seq", event.clientSeq)
             .put("task_item_id", event.taskItemId)
-            .put("location_id", event.locationId)
-            .put("product_id", event.productId)
             .put("qty", event.qty)
-            .put("barcode", event.barcode ?: JSONObject.NULL)
-            .toString()
-        return request("/tasks/${encode(event.taskId)}/scan", json)
+
+        return when (event.kind) {
+            PendingPickEvent.Kind.PICK -> {
+                json.put("location_id", event.locationId)
+                    .put("product_id", event.productId)
+                    .put("barcode", event.barcode ?: JSONObject.NULL)
+                request("/tasks/${encode(event.taskId)}/scan", json.toString())
+            }
+            PendingPickEvent.Kind.SHORT -> {
+                json.put("reason", event.reason ?: "MISSING_AT_LOCATION")
+                request("/tasks/${encode(event.taskId)}/short", json.toString())
+            }
+        }
     }
 
     fun inventoryByProduct(asin: String): Result =
@@ -72,6 +80,9 @@ class ApiClient {
 
     fun inventoryByLocation(locationId: String): Result =
         request("/inventory/location/${encode(locationId)}", null, "GET")
+
+    fun inventoryByBarcode(barcode: String): Result =
+        request("/inventory/barcode/${encode(barcode)}", null, "GET")
 
     fun parseSession(body: String): SessionInfo {
         val o = JSONObject(body)
@@ -178,6 +189,8 @@ class ApiClient {
             clientHighWaterSeq = o.optLong("client_high_water_seq", 0),
             expectedUnits = o.optInt("expected_units", 0),
             pickedUnits = o.optInt("picked_units", 0),
+            shortedUnits = o.optInt("shorted_units", 0),
+            processedUnits = o.optInt("processed_units", o.optInt("picked_units", 0)),
             remainingUnits = o.optInt("remaining_units", 0),
             recoveryRequired = o.optBoolean("recovery_required", false),
             offerExpiresAt = o.nullableString("offer_expires_at"),
