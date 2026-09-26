@@ -334,6 +334,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             }
             AppScreen.PICK -> handlePickScan(value)
             AppScreen.HOME -> message = "Scan received • open a tool to use it"
+            AppScreen.UNPACK,
+            AppScreen.BOH,
+            AppScreen.DAMAGE -> message = "Scan received • operation screen is not active yet"
         }
     }
 
