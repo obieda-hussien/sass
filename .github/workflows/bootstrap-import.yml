@@ -30,9 +30,17 @@ jobs:
           cat bootstrap/part-00.b64 bootstrap/part-01.b64 bootstrap/part-02.b64 bootstrap/part-03.b64 bootstrap/part-04.b64 bootstrap/fix05-0.b64 bootstrap/fix05-1.b64 bootstrap/part-06.b64 bootstrap/part-07.b64 bootstrap/part-08.b64 bootstrap/part-09.b64 bootstrap/part-10.b64 bootstrap/fix11-0.b64 bootstrap/fix11-1.b64 > /tmp/fulfillos.b64
           test "$(wc -c < /tmp/fulfillos.b64)" -eq 95564
           base64 --decode /tmp/fulfillos.b64 > /tmp/fulfillos.zip
+          set +e
           unzip -t /tmp/fulfillos.zip
+          unzip_rc=$?
+          set -e
+          if [ "$unzip_rc" -gt 1 ]; then exit "$unzip_rc"; fi
           mkdir -p /tmp/fulfillos-src
+          set +e
           unzip -q /tmp/fulfillos.zip -d /tmp/fulfillos-src
+          unzip_rc=$?
+          set -e
+          if [ "$unzip_rc" -gt 1 ]; then exit "$unzip_rc"; fi
 
       - name: Replace bootstrap payload with real project
         shell: bash
