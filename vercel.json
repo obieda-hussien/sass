@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "experimentalServices": {
+    "web": {
+      "entrypoint": "web",
+      "routePrefix": "/"
+    },
+    "api": {
+      "entrypoint": "backend/app/main.py",
+      "routePrefix": "/api",
+      "maxDuration": 60
+    }
+  }
+}
