@@ -145,3 +145,18 @@ class StageRequest(BaseModel):
 
 class HandoffRequest(BaseModel):
     handoff_ref: str
+
+
+class ShortPickRequest(BaseModel):
+    event_id: str
+    client_seq: int = Field(gt=0)
+    task_item_id: str
+    qty: int = Field(gt=0)
+    reason: str = "MISSING_AT_LOCATION"
+
+
+class RecoveryStowRequest(BaseModel):
+    event_id: str
+    product_id: str
+    qty: int = Field(gt=0)
+    destination_location_id: str

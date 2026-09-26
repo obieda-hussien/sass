@@ -19,14 +19,16 @@ from .models import (
 from .schemas import (
     BOHMoveRequest, CancelRequest, CycleCountApplyRequest, CycleCountLineRequest, CycleCountStartRequest,
     DamageRequest, DowntimeRequest, HeartbeatRequest, InventoryMoveRequest, LoginRequest, OrderCreate,
-    HandoffRequest, PickScanRequest, ReceiveRequest, RefreshRequest, RejectOfferRequest, StageRequest, SyncBatchRequest,
-    TaskOfferRequest, UnpackScanRequest, UnpackStartRequest,
+    HandoffRequest, PickScanRequest, ReceiveRequest, RecoveryStowRequest, RefreshRequest, RejectOfferRequest,
+    ShortPickRequest, StageRequest, SyncBatchRequest, TaskOfferRequest, UnpackScanRequest, UnpackStartRequest,
 )
 from .security import authenticate_access, issue_session, refresh_session, verify_password
 from .seed import ensure_location, seed_demo
 from .services.allocation import AllocationError, allocate_order
 from .services.inventory import InventoryError, move_inventory
-from .services.picking import PickError, accept_task, cancel_order, commit_pick, task_snapshot
+from .services.picking import (
+    PickError, accept_task, cancel_order, commit_pick, recover_stow, recovery_snapshot, short_pick, task_snapshot,
+)
 from .services.scheduling import active_task_for_actor, claim_next_task, reject_offer
 from .services.operations import (
     OperationError, apply_cycle_count, boh_move, complete_unpack, damage_move, record_cycle_count,
@@ -207,6 +209,35 @@ def inventory_by_location(location_id: str, db: Session = Depends(get_db)):
     return {"location_id": location_id, "items": items}
 
 
+@app.get("/inventory/barcode/{barcode}")
+def inventory_by_barcode(barcode: str, db: Session = Depends(get_db)):
+    mapping = db.scalar(select(Barcode).where(Barcode.code == barcode))
+    if not mapping:
+        raise HTTPException(404, "Barcode not mapped")
+    product = db.get(Product, mapping.product_id)
+    balances = db.scalars(select(InventoryBalance).where(InventoryBalance.product_id == mapping.product_id)).all()
+    return {
+        "barcode": barcode,
+        "product": {
+            "id": product.id,
+            "asin": product.asin,
+            "title": product.title,
+            "temperature_class": product.temperature_class,
+            "handling_class": product.handling_class,
+        },
+        "total_on_hand": sum(b.qty_on_hand for b in balances),
+        "locations": [
+            {
+                "location_id": b.location_id,
+                "qty_on_hand": b.qty_on_hand,
+                "qty_reserved": b.qty_reserved,
+                "version": b.version,
+            }
+            for b in balances
+        ],
+    }
+
+
 @app.post("/inventory/move")
 def inventory_move(req: InventoryMoveRequest, who=Depends(actor), db: Session = Depends(get_db)):
     user, device = who
@@ -343,6 +374,36 @@ def scan(task_id: str, req: PickScanRequest, who=Depends(actor), db: Session = D
         raise HTTPException(409, detail)
 
 
+@app.post("/tasks/{task_id}/short")
+def short_task_item(task_id: str, req: ShortPickRequest, who=Depends(actor), db: Session = Depends(get_db)):
+    user, device = who
+    try:
+        with db.begin():
+            task = db.get(PickTask, task_id)
+            if not task:
+                raise HTTPException(404, "Task not found")
+            ack = short_pick(
+                db,
+                task=task,
+                event_id=req.event_id,
+                client_seq=req.client_seq,
+                task_item_id=req.task_item_id,
+                qty=req.qty,
+                reason=req.reason,
+                user_id=user.id,
+                device_id=device.id,
+            )
+            return {"duplicate": ack.duplicate, "snapshot": ack.snapshot}
+    except PickError as e:
+        task = db.get(PickTask, task_id)
+        detail = {
+            "code": e.code,
+            "message": str(e),
+            "authoritative_snapshot": task_snapshot(db, task) if task else None,
+        }
+        raise HTTPException(409, detail)
+
+
 @app.post("/tasks/{task_id}/sync")
 def sync(task_id: str, req: SyncBatchRequest, who=Depends(actor), db: Session = Depends(get_db)):
     user, device = who
@@ -379,6 +440,39 @@ def cancel(order_id: str, req: CancelRequest, who=Depends(actor), db: Session = 
         if not order:
             raise HTTPException(404, "Order not found")
         return cancel_order(db, order, req.reason)
+
+
+@app.get("/tasks/{task_id}/recovery")
+def task_recovery(task_id: str, who=Depends(actor), db: Session = Depends(get_db)):
+    task = db.get(PickTask, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    try:
+        return recovery_snapshot(db, task)
+    except PickError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.post("/tasks/{task_id}/recovery/stow")
+def task_recovery_stow(task_id: str, req: RecoveryStowRequest, who=Depends(actor), db: Session = Depends(get_db)):
+    user, device = who
+    try:
+        with db.begin():
+            task = db.get(PickTask, task_id)
+            if not task:
+                raise HTTPException(404, "Task not found")
+            return recover_stow(
+                db,
+                task=task,
+                event_id=req.event_id,
+                product_id=req.product_id,
+                qty=req.qty,
+                destination_location_id=req.destination_location_id,
+                user_id=user.id,
+                device_id=device.id,
+            )
+    except PickError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
 
 
 @app.post("/tasks/{task_id}/downtime/start")
