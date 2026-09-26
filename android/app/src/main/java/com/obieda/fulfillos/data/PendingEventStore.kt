@@ -34,7 +34,7 @@ class PendingEventStore(context: Context) : SQLiteOpenHelper(context, "fulfillos
             """INSERT OR IGNORE INTO pending_pick_event
             (event_id,task_id,client_seq,task_item_id,location_id,product_id,qty,barcode,created_ms,state)
             VALUES(?,?,?,?,?,?,?,?,?,?)""",
-            arrayOf(event.eventId, event.taskId, event.clientSeq, event.taskItemId, event.locationId,
+            arrayOf<Any?>(event.eventId, event.taskId, event.clientSeq, event.taskItemId, event.locationId,
                 event.productId, event.qty, event.barcode, event.createdAtEpochMs, event.state.name)
         )
     }
