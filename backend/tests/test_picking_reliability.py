@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
-from app.models import Device, DowntimeSegment, Order, OrderLine, PickTaskItem, Product, User
+from app.models import Barcode, Device, DowntimeSegment, Order, OrderLine, PickTaskItem, Product, User
 from app.services.allocation import allocate_order
-from app.services.picking import accept_task, cancel_order, commit_pick, PickError
+from app.services.picking import accept_task, cancel_order, commit_pick, PickError, task_snapshot
 from app.services.sla import board_target_seconds, effective_elapsed_seconds
 
 
@@ -72,6 +72,40 @@ def test_out_of_order_scan_forces_reconciliation(db):
     except PickError as e:
         db.rollback()
         assert e.code == "SEQUENCE_CONFLICT"
+
+
+def test_wrong_barcode_is_rejected_before_inventory_move(db):
+    _, task, product = create_order_and_task(db, qty=2)
+    user, device, task = prepare_owned_task(db, task)
+    item = db.scalars(select(PickTaskItem).where(PickTaskItem.task_id == task.id)).first()
+    other = db.scalar(select(Product).where(Product.asin == "DEMO-CHIPS-001"))
+    wrong_barcode = db.scalar(select(Barcode.code).where(Barcode.product_id == other.id))
+    db.commit()
+
+    try:
+        commit_pick(
+            db, task=task, event_id="wrong-barcode", client_seq=1, task_item_id=item.id,
+            location_id=item.source_location_id, product_id=product.id, qty=1,
+            barcode=wrong_barcode, user_id=user.id, device_id=device.id,
+        )
+        assert False, "expected barcode mismatch"
+    except PickError as e:
+        db.rollback()
+        assert e.code == "BARCODE_MISMATCH"
+
+    task = db.get(type(task), task.id)
+    assert task.client_high_water_seq == 0
+    item = db.get(PickTaskItem, item.id)
+    assert item.picked_qty == 0
+
+
+def test_task_snapshot_contains_picker_catalog_metadata(db):
+    _, task, product = create_order_and_task(db, qty=1)
+    snap = task_snapshot(db, task)
+    item = snap["items"][0]
+    assert item["asin"] == product.asin
+    assert item["title"]
+    assert item["barcodes"] == ["6220000000001"]
 
 
 def test_mid_pick_cancel_becomes_recovery_not_disappearance(db):

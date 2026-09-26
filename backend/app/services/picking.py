@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import (
+    Barcode,
     InventoryBalance,
     Location,
     Order,
@@ -14,6 +15,7 @@ from ..models import (
     OrderStatus,
     PickTask,
     PickTaskItem,
+    Product,
     ScanEvent,
     TaskStatus,
 )
@@ -47,9 +49,40 @@ def ensure_virtual_location(db: Session, location_id: str, handling: str = "STAN
         db.flush()
 
 
+def _catalog_item(db: Session, product_id: str) -> dict:
+    product = db.get(Product, product_id)
+    barcodes = list(db.scalars(select(Barcode.code).where(Barcode.product_id == product_id)).all())
+    return {
+        "asin": product.asin if product else None,
+        "title": product.title if product else "Unknown product",
+        "temperature_class": product.temperature_class if product else None,
+        "handling_class": product.handling_class if product else None,
+        "barcodes": barcodes,
+    }
+
+
 def task_snapshot(db: Session, task: PickTask) -> dict:
-    items = db.scalars(select(PickTaskItem).where(PickTaskItem.task_id == task.id).order_by(PickTaskItem.sequence)).all()
+    items = db.scalars(
+        select(PickTaskItem)
+        .where(PickTaskItem.task_id == task.id)
+        .order_by(PickTaskItem.sequence)
+    ).all()
     order = db.get(Order, task.order_id)
+
+    item_payloads = []
+    for item in items:
+        catalog = _catalog_item(db, item.product_id)
+        item_payloads.append({
+            "id": item.id,
+            "product_id": item.product_id,
+            "source_location_id": item.source_location_id,
+            "planned_qty": item.planned_qty,
+            "picked_qty": item.picked_qty,
+            "remaining_qty": max(0, item.planned_qty - item.picked_qty),
+            "sequence": item.sequence,
+            **catalog,
+        })
+
     return {
         "task_id": task.id,
         "order_id": task.order_id,
@@ -61,18 +94,7 @@ def task_snapshot(db: Session, task: PickTask) -> dict:
         "picked_units": sum(i.picked_qty for i in items),
         "remaining_units": sum(max(0, i.planned_qty - i.picked_qty) for i in items),
         "recovery_required": bool(order.recovery_required) if order else False,
-        "items": [
-            {
-                "id": i.id,
-                "product_id": i.product_id,
-                "source_location_id": i.source_location_id,
-                "planned_qty": i.planned_qty,
-                "picked_qty": i.picked_qty,
-                "remaining_qty": max(0, i.planned_qty - i.picked_qty),
-                "sequence": i.sequence,
-            }
-            for i in items
-        ],
+        "items": item_payloads,
     }
 
 
@@ -94,6 +116,17 @@ def accept_task(db: Session, task: PickTask, user_id: str, device_id: str) -> di
         order.status = OrderStatus.PICKING.value
     db.flush()
     return task_snapshot(db, task)
+
+
+def _validate_barcode(db: Session, barcode: str | None, product_id: str) -> None:
+    if barcode is None:
+        return
+    normalized = barcode.strip()
+    if not normalized:
+        raise PickError("Empty product barcode", "BARCODE_MISMATCH")
+    mapped = db.scalar(select(Barcode).where(Barcode.code == normalized))
+    if mapped is None or mapped.product_id != product_id:
+        raise PickError("Scanned barcode does not belong to the expected product", "BARCODE_MISMATCH")
 
 
 def commit_pick(
@@ -133,6 +166,9 @@ def commit_pick(
         raise PickError("Wrong product", "PRODUCT_MISMATCH")
     if item.source_location_id != location_id:
         raise PickError("Wrong bin/location", "LOCATION_MISMATCH")
+
+    _validate_barcode(db, barcode, product_id)
+
     remaining = item.planned_qty - item.picked_qty
     if qty > remaining:
         raise PickError(f"Quantity exceeds remaining planned quantity {remaining}", "QTY_EXCEEDS_PLAN")
@@ -190,7 +226,10 @@ def commit_pick(
         server_version_after=task.server_version,
     ))
 
-    remaining_total = db.scalar(select(func.sum(PickTaskItem.planned_qty - PickTaskItem.picked_qty)).where(PickTaskItem.task_id == task.id)) or 0
+    remaining_total = db.scalar(
+        select(func.sum(PickTaskItem.planned_qty - PickTaskItem.picked_qty))
+        .where(PickTaskItem.task_id == task.id)
+    ) or 0
     if remaining_total <= 0:
         task.status = TaskStatus.PICKED.value
         task.finished_at = now
@@ -231,8 +270,6 @@ def cancel_order(db: Session, order: Order, reason: str) -> dict:
         order.recovery_required = True
         task.status = TaskStatus.RECOVERY_REQUIRED.value
     elif picked_units > 0:
-        # Do not pretend physically-picked inventory teleported back to its source bin.
-        # Freeze the task and create an explicit recovery/stow obligation.
         order.status = OrderStatus.CANCELLED_RECOVERY.value
         order.recovery_required = True
         task.status = TaskStatus.RECOVERY_REQUIRED.value
