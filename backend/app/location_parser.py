@@ -7,7 +7,7 @@ from .enums import HandlingClass, LocationKind, TemperatureClass
 
 
 PHYSICAL = re.compile(
-    r"^P-(?P<floor>\d+)-(?:(?P<hazard>HAZ)-)?"
+    r"^P-(?P<floor>\d+)-(?:(?P<hazard>HAZ)-?)?"
     r"(?P<fixture>[AVDXHTRCF])(?P<aisle>\d{3})(?P<level>[A-Z])(?P<slot>\d{3})$"
 )
 
