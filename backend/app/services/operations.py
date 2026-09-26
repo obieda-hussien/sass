@@ -42,11 +42,43 @@ def start_unpack(db: Session, temperature_class: str, user_id: str, device_id: s
         raise OperationError("Unsupported temperature class", "BAD_TEMPERATURE_CLASS")
     if not db.get(Location, tote):
         raise OperationError(f"Unpack tote {tote} is not configured", "TOTE_NOT_CONFIGURED")
+
+    # Retry/resume invariant: a PDA may reboot or the network may time out after
+    # creating a session. Reissuing "start" must return the same open session
+    # instead of creating duplicate workflow state.
+    existing = db.scalar(
+        select(UnpackSession)
+        .where(
+            UnpackSession.temperature_class == temp,
+            UnpackSession.user_id == user_id,
+            UnpackSession.device_id == device_id,
+            UnpackSession.status == "OPEN",
+        )
+        .order_by(UnpackSession.created_at.desc())
+    )
+    if existing:
+        return existing
+
     session = UnpackSession(temperature_class=temp, tote_location_id=tote, user_id=user_id, device_id=device_id)
     db.add(session)
     db.flush()
     audit(db, "UNPACK_STARTED", "UNPACK_SESSION", session.id, user_id=user_id, device_id=device_id, payload={"tote": tote, "temperature": temp})
     return session
+
+
+def active_unpack(db: Session, user_id: str, device_id: str, temperature_class: str | None = None) -> UnpackSession | None:
+    query = (
+        select(UnpackSession)
+        .where(
+            UnpackSession.user_id == user_id,
+            UnpackSession.device_id == device_id,
+            UnpackSession.status == "OPEN",
+        )
+        .order_by(UnpackSession.created_at.desc())
+    )
+    if temperature_class:
+        query = query.where(UnpackSession.temperature_class == temperature_class.upper())
+    return db.scalar(query)
 
 
 def scan_unpack(db: Session, session: UnpackSession, event_id: str, product_id: str, qty: int) -> dict:
