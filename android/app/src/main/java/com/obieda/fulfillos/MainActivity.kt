@@ -109,6 +109,9 @@ private fun FulfillApp(vm: AppViewModel) {
                 AppScreen.HOME -> HomeScreen(vm)
                 AppScreen.PICK -> PickScreen(vm)
                 AppScreen.INVENTORY -> InventoryScreen(vm)
+                AppScreen.UNPACK,
+                AppScreen.BOH,
+                AppScreen.DAMAGE -> HomeScreen(vm)
             }
         }
     }
