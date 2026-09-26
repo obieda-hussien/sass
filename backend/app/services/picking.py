@@ -106,6 +106,10 @@ def task_snapshot(db: Session, task: PickTask) -> dict:
 
 
 def accept_task(db: Session, task: PickTask, user_id: str, device_id: str) -> dict:
+    if task.status in {TaskStatus.ACCEPTED.value, TaskStatus.PICKING.value}:
+        if task.assigned_user_id == user_id and task.assigned_device_id == device_id:
+            return task_snapshot(db, task)
+        raise PickError("Task is already owned by another associate/device", "OWNERSHIP_MISMATCH")
     if task.status not in {TaskStatus.OFFERED.value, TaskStatus.READY.value}:
         raise PickError(f"Task cannot be accepted from {task.status}", "INVALID_STATE")
     if task.assigned_user_id and task.assigned_user_id != user_id:
