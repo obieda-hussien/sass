@@ -412,22 +412,38 @@ def sync(task_id: str, req: SyncBatchRequest, who=Depends(actor), db: Session = 
     acks = []
     events = sorted(req.events, key=lambda e: e.client_seq)
     for event in events:
-        if event.event_type != "PICK":
-            acks.append({"event_id": event.event_id, "status": "REJECTED", "code": "UNSUPPORTED_EVENT"})
-            continue
         p = event.payload
         try:
             with db.begin():
                 task = db.get(PickTask, task_id)
-                ack = commit_pick(
-                    db, task=task, event_id=event.event_id, client_seq=event.client_seq,
-                    task_item_id=p["task_item_id"], location_id=p["location_id"],
-                    product_id=p["product_id"], qty=int(p["qty"]), barcode=p.get("barcode"),
-                    user_id=user.id, device_id=device.id,
-                )
-                acks.append({"event_id": event.event_id, "status": "ACKED", "duplicate": ack.duplicate, "server_version": ack.snapshot["server_version"]})
-        except PickError as e:
-            acks.append({"event_id": event.event_id, "status": "REJECTED", "code": e.code, "message": str(e)})
+                if not task:
+                    raise PickError("Task not found", "TASK_NOT_FOUND")
+                if event.event_type == "PICK":
+                    ack = commit_pick(
+                        db, task=task, event_id=event.event_id, client_seq=event.client_seq,
+                        task_item_id=p["task_item_id"], location_id=p["location_id"],
+                        product_id=p["product_id"], qty=int(p["qty"]), barcode=p.get("barcode"),
+                        user_id=user.id, device_id=device.id,
+                    )
+                elif event.event_type == "SHORT":
+                    ack = short_pick(
+                        db, task=task, event_id=event.event_id, client_seq=event.client_seq,
+                        task_item_id=p["task_item_id"], qty=int(p["qty"]),
+                        reason=p.get("reason", "MISSING_AT_LOCATION"),
+                        user_id=user.id, device_id=device.id,
+                    )
+                else:
+                    acks.append({"event_id": event.event_id, "status": "REJECTED", "code": "UNSUPPORTED_EVENT"})
+                    continue
+                acks.append({
+                    "event_id": event.event_id,
+                    "status": "ACKED",
+                    "duplicate": ack.duplicate,
+                    "server_version": ack.snapshot["server_version"],
+                })
+        except (PickError, KeyError, ValueError) as e:
+            code = e.code if isinstance(e, PickError) else "INVALID_EVENT_PAYLOAD"
+            acks.append({"event_id": event.event_id, "status": "REJECTED", "code": code, "message": str(e)})
             break
     task = db.get(PickTask, task_id)
     return {"acks": acks, "authoritative_snapshot": task_snapshot(db, task) if task else None}
