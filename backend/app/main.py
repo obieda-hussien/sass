@@ -15,7 +15,6 @@ from .models import (
     Barcode,
     DowntimeEvent,
     InventoryBalance,
-    Location,
     Product,
     ScanEvent,
     Task,
