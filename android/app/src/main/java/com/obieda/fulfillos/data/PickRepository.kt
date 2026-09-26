@@ -1,13 +1,23 @@
 package com.obieda.fulfillos.data
 
+import com.obieda.fulfillos.domain.ConnectivityState
 import com.obieda.fulfillos.domain.PendingPickEvent
+import com.obieda.fulfillos.domain.TaskSnapshot
 import java.util.UUID
 import java.util.concurrent.Executors
+
+sealed interface PickSyncResult {
+    data class Acked(val snapshot: TaskSnapshot, val eventId: String) : PickSyncResult
+    data class Queued(val eventId: String, val reason: String) : PickSyncResult
+    data class Conflict(val snapshot: TaskSnapshot?, val message: String) : PickSyncResult
+    data object AuthenticationRequired : PickSyncResult
+}
 
 class PickRepository(
     private val events: PendingEventStore,
     private val api: ApiClient,
     private val connectivity: ConnectivityMonitor,
+    private val sessions: SessionManager,
 ) {
     private val io = Executors.newSingleThreadExecutor()
 
@@ -18,7 +28,7 @@ class PickRepository(
         productId: String,
         qty: Int,
         barcode: String?,
-        onResult: (String) -> Unit,
+        onResult: (PickSyncResult) -> Unit,
     ) {
         val event = PendingPickEvent(
             eventId = UUID.randomUUID().toString(),
@@ -32,43 +42,57 @@ class PickRepository(
             createdAtEpochMs = System.currentTimeMillis(),
             state = PendingPickEvent.State.PENDING,
         )
-        // Critical invariant: durable first, network second.
         events.persistBeforeNetwork(event)
-        onResult("Pending sync • ${event.eventId.take(8)}")
+        if (connectivity.state != ConnectivityState.ONLINE) {
+            onResult(PickSyncResult.Queued(event.eventId, "Offline • scan safely queued"))
+            return
+        }
         flush(taskId, onResult)
     }
 
-    fun flush(taskId: String? = null, onResult: (String) -> Unit = {}) {
-        if (connectivity.state != com.obieda.fulfillos.domain.ConnectivityState.ONLINE) {
-            onResult("Offline • events safely queued")
-            return
-        }
+    fun flush(taskId: String? = null, onResult: (PickSyncResult) -> Unit = {}) {
+        if (connectivity.state != ConnectivityState.ONLINE) return
         io.execute {
             for (event in events.pending(taskId)) {
                 events.mark(event.eventId, PendingPickEvent.State.SENDING)
-                val result = runCatching { api.postPick(event) }.getOrElse {
+                var response = runCatching { api.postPick(event) }.getOrElse {
                     events.mark(event.eventId, PendingPickEvent.State.PENDING)
-                    onResult("Network error • will retry")
+                    onResult(PickSyncResult.Queued(event.eventId, "Network error • retry pending"))
                     return@execute
                 }
-                when (result.code) {
+
+                if (response.code == 401 && sessions.refreshBlocking()) {
+                    response = runCatching { api.postPick(event) }.getOrElse {
+                        events.mark(event.eventId, PendingPickEvent.State.PENDING)
+                        onResult(PickSyncResult.Queued(event.eventId, "Reconnect succeeded but send failed"))
+                        return@execute
+                    }
+                }
+
+                when (response.code) {
                     in 200..299 -> {
                         events.mark(event.eventId, PendingPickEvent.State.ACKED)
-                        onResult("Server confirmed • ${event.eventId.take(8)}")
+                        val snapshot = api.parsePickSnapshot(response.body)
+                        onResult(PickSyncResult.Acked(snapshot, event.eventId))
                     }
                     401 -> {
                         events.mark(event.eventId, PendingPickEvent.State.PENDING)
-                        onResult("Session refresh required")
+                        onResult(PickSyncResult.AuthenticationRequired)
                         return@execute
                     }
                     409 -> {
                         events.mark(event.eventId, PendingPickEvent.State.REJECTED)
-                        onResult("Reconciliation required • server state wins")
+                        onResult(
+                            PickSyncResult.Conflict(
+                                snapshot = api.parseConflictSnapshot(response.body),
+                                message = api.parseConflictMessage(response.body),
+                            )
+                        )
                         return@execute
                     }
                     else -> {
                         events.mark(event.eventId, PendingPickEvent.State.PENDING)
-                        onResult("Server unavailable • will retry")
+                        onResult(PickSyncResult.Queued(event.eventId, "Server unavailable (${response.code}) • retry pending"))
                         return@execute
                     }
                 }

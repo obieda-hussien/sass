@@ -10,7 +10,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class SecureSessionStore(private val context: Context) {
+class SecureSessionStore(context: Context) {
     private val alias = "fulfillos.session.v1"
     private val prefs = context.getSharedPreferences("secure_session", Context.MODE_PRIVATE)
 
@@ -18,13 +18,24 @@ class SecureSessionStore(private val context: Context) {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey(alias, null) as? SecretKey)?.let { return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        generator.init(KeyGenParameterSpec.Builder(
-            alias,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-        ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .build())
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                alias,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .build()
+        )
         return generator.generateKey()
+    }
+
+    fun putSession(refreshToken: String, username: String, deviceId: String) {
+        putRefreshToken(refreshToken)
+        prefs.edit()
+            .putString("username", username)
+            .putString("device_id", deviceId)
+            .apply()
     }
 
     fun putRefreshToken(token: String) {
@@ -46,6 +57,9 @@ class SecureSessionStore(private val context: Context) {
             String(cipher.doFinal(Base64.decode(data, Base64.NO_WRAP)), Charsets.UTF_8)
         }.getOrNull()
     }
+
+    fun getUsername(): String? = prefs.getString("username", null)
+    fun getDeviceId(): String? = prefs.getString("device_id", null)
 
     fun clear() = prefs.edit().clear().apply()
 }

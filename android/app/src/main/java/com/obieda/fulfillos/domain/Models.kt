@@ -1,11 +1,26 @@
 package com.obieda.fulfillos.domain
 
+data class SessionInfo(
+    val accessToken: String,
+    val refreshToken: String,
+    val userId: String,
+    val username: String,
+    val role: String,
+    val deviceId: String,
+)
+
 data class TaskItem(
     val id: String,
     val productId: String,
+    val asin: String?,
+    val title: String,
+    val barcodes: List<String>,
+    val temperatureClass: String?,
+    val handlingClass: String?,
     val locationId: String,
     val plannedQty: Int,
     val pickedQty: Int,
+    val remainingQty: Int,
     val sequence: Int,
 )
 
@@ -20,8 +35,12 @@ data class TaskSnapshot(
     val pickedUnits: Int,
     val remainingUnits: Int,
     val recoveryRequired: Boolean,
+    val offerExpiresAt: String? = null,
     val items: List<TaskItem>,
-)
+) {
+    val currentItem: TaskItem?
+        get() = items.firstOrNull { it.remainingQty > 0 }
+}
 
 data class PendingPickEvent(
     val eventId: String,
@@ -38,4 +57,19 @@ data class PendingPickEvent(
     enum class State { PENDING, SENDING, ACKED, REJECTED }
 }
 
+data class InventoryRow(
+    val primary: String,
+    val secondary: String,
+    val quantity: Int,
+)
+
+data class InventoryLookup(
+    val heading: String,
+    val subheading: String,
+    val total: Int?,
+    val rows: List<InventoryRow>,
+)
+
 enum class ConnectivityState { ONLINE, OFFLINE, RECONNECTING }
+enum class AppScreen { HOME, PICK, INVENTORY }
+enum class PickScanPhase { BIN, ITEM, SYNCING, DONE }
