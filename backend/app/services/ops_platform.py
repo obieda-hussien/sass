@@ -444,6 +444,73 @@ def claim_task(db: Session, task: PickTask, user_id: str, device_id: str) -> Pic
     return db.get(PickTask, task.id)
 
 
+def decline_task_offer(
+    db: Session,
+    task: PickTask,
+    *,
+    user_id: str,
+    device_id: str | None = None,
+    reason: str = "ASSOCIATE_REJECTED",
+) -> dict[str, Any]:
+    now = now_utc()
+
+    # Direct/manual/legacy assignment: release the reserved picker and return
+    # the order to the pool.
+    if task.assigned_user_id is not None:
+        if task.assigned_user_id != user_id:
+            raise OpsError("Order is assigned to another picker", "OWNERSHIP_MISMATCH")
+        if task.assigned_device_id and device_id and task.assigned_device_id != device_id:
+            raise OpsError("Order belongs to another device", "DEVICE_MISMATCH")
+        if task.status != TaskStatus.OFFERED.value:
+            raise OpsError(f"Task cannot be rejected from {task.status}", "INVALID_TASK_STATE")
+        release_pick_lease(db, task, reason="OFFER_REJECTED")
+        task.assigned_user_id = None
+        task.assigned_device_id = None
+        task.status = TaskStatus.READY.value
+        task.offered_at = None
+        task.server_version += 1
+        order = db.get(Order, task.order_id)
+        if order and order.status == OrderStatus.OFFERED.value:
+            order.status = OrderStatus.ALLOCATED.value
+        db.flush()
+        return {"task_id": task.id, "status": task.status, "reason": reason}
+
+    offer = db.scalar(
+        select(PickOffer).where(
+            PickOffer.task_id == task.id,
+            PickOffer.user_id == user_id,
+            PickOffer.status == "OPEN",
+        )
+    )
+    if offer is None:
+        raise OpsError("Open offer not found for picker", "OFFER_NOT_FOUND")
+    offer.status = "DECLINED"
+    offer.closed_at = now
+
+    open_count = db.scalar(
+        select(func.count()).select_from(PickOffer).where(
+            PickOffer.task_id == task.id,
+            PickOffer.status == "OPEN",
+            or_(PickOffer.expires_at.is_(None), PickOffer.expires_at > now),
+        )
+    ) or 0
+    if open_count == 0 and task.status == TaskStatus.OFFERED.value:
+        task.status = TaskStatus.READY.value
+        task.offered_at = None
+        task.server_version += 1
+        order = db.get(Order, task.order_id)
+        if order and order.status == OrderStatus.OFFERED.value:
+            order.status = OrderStatus.ALLOCATED.value
+
+    db.flush()
+    return {
+        "task_id": task.id,
+        "status": task.status,
+        "offer_status": offer.status,
+        "reason": reason,
+    }
+
+
 def direct_assign_task(
     db: Session,
     task: PickTask,
