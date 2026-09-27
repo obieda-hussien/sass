@@ -10,6 +10,7 @@ from app.models_ops import (
     ReplenishmentEvent,
     ReplenishmentTask,
     ShiftAssignment,
+    PromotionRecord,
 )
 from app.seed import ensure_location
 from app.services.governance import (
@@ -25,6 +26,7 @@ from app.services.governance import (
     start_break,
 )
 from app.services.ops_platform import get_worker_state, set_worker_state
+from app.services.workforce import ROLE_LEVELS, WorkforceError, promote_employee
 from app.services.replenishment import (
     ReplenishmentError,
     claim,
@@ -45,6 +47,80 @@ def _product_barcode(db, asin: str) -> tuple[str, str]:
     product = db.scalar(select(Product).where(Product.asin == asin))
     barcode = db.scalar(select(Barcode.code).where(Barcode.product_id == product.id))
     return product.id, barcode
+
+
+
+def test_rank_ladder_promotion_is_audited_and_salary_change_is_explicit(db):
+    with db.begin():
+        picker = _user(db, "picker1")
+        supervisor = _user(db, "supervisor")
+        profile = db.get(EmployeeProfile, picker.id)
+        if profile is None:
+            profile = EmployeeProfile(
+                user_id=picker.id,
+                employee_code="PICKER-PROMO",
+                full_name="Picker Promotion",
+                base_salary_cents=500_000,
+                overtime_rate_cents_per_hour=5_000,
+                grace_minutes=10,
+            )
+            db.add(profile)
+            db.flush()
+
+        assert ROLE_LEVELS["PICKER"] < ROLE_LEVELS["SENIOR_PICKER"]
+        first = promote_employee(
+            db,
+            user=picker,
+            to_role="SENIOR_PICKER",
+            reason="Consistent order quality and reliability",
+            approver_id=supervisor.id,
+            new_base_salary_cents=550_000,
+        )
+        assert picker.role == "SENIOR_PICKER"
+        assert profile.base_salary_cents == 550_000
+        assert first.from_role == "PICKER"
+        assert first.to_role == "SENIOR_PICKER"
+
+        second = promote_employee(
+            db,
+            user=picker,
+            to_role="QUALITY",
+            reason="Move into quality ownership",
+            approver_id=supervisor.id,
+        )
+        assert picker.role == "QUALITY"
+        assert profile.base_salary_cents == 550_000
+        assert second.old_base_salary_cents == second.new_base_salary_cents == 550_000
+
+        records = db.scalars(
+            select(PromotionRecord)
+            .where(PromotionRecord.user_id == picker.id)
+            .order_by(PromotionRecord.created_at)
+        ).all()
+        assert [(row.from_role, row.to_role) for row in records] == [
+            ("PICKER", "SENIOR_PICKER"),
+            ("SENIOR_PICKER", "QUALITY"),
+        ]
+
+        with pytest.raises(WorkforceError) as downgrade:
+            promote_employee(
+                db,
+                user=picker,
+                to_role="PICKER",
+                reason="Should not be accepted as promotion",
+                approver_id=supervisor.id,
+            )
+        assert downgrade.value.code == "NOT_A_PROMOTION"
+
+        with pytest.raises(WorkforceError) as admin:
+            promote_employee(
+                db,
+                user=picker,
+                to_role="ADMIN",
+                reason="Admin cannot be reached through warehouse promotion",
+                approver_id=supervisor.id,
+            )
+        assert admin.value.code == "ADMIN_PROMOTION_FORBIDDEN"
 
 
 def test_permission_scope_can_extend_picker_without_changing_role(db):
