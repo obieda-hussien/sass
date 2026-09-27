@@ -109,6 +109,8 @@ class ApiClient {
     fun finishPicking(taskId: String): Result =
         request("/ops/tasks/${encode(taskId)}/finish-picking", "{}")
 
+    fun getWorkerState(): Result = request("/ops/me/state", null, "GET")
+
     fun updateWorkerState(state: String, reason: String? = null): Result =
         request(
             "/ops/me/state",
@@ -117,6 +119,9 @@ class ApiClient {
                 .put("reason", reason ?: JSONObject.NULL)
                 .toString(),
         )
+
+    fun parseWorkerState(body: String): String =
+        JSONObject(body).optString("state", "AVAILABLE")
 
     fun inventoryByProduct(asin: String): Result =
         request("/inventory/product/${encode(asin)}", null, "GET")
