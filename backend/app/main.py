@@ -23,7 +23,7 @@ from .schemas import (
     ShortPickRequest, StageRequest, SyncBatchRequest, TaskOfferRequest, UnpackScanRequest, UnpackStartRequest,
 )
 from .security import authenticate_access, issue_session, refresh_session, verify_password
-from .seed import ensure_location, seed_demo
+from .seed import ensure_location, seed_bootstrap_users, seed_demo
 from .services.allocation import AllocationError, allocate_order
 from .services.inventory import InventoryError, move_inventory
 from .services.picking import (
@@ -36,22 +36,25 @@ from .services.operations import (
 )
 from .services.sla import board_target_seconds, effective_elapsed_seconds
 from .services.fulfillment import FulfillmentError, complete_delivery, handoff_task, stage_task, start_pack_rack
+from .telemetry import emit as emit_telemetry, ping as telemetry_ping
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
-    if os.getenv("DEMO_SEED", "1") == "1":
-        from .database import SessionLocal
-        db = SessionLocal()
-        try:
-            with db.begin():
+    from .database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        with db.begin():
+            seed_bootstrap_users(db)
+            if os.getenv("DEMO_SEED", "0") == "1":
                 seed_demo(db)
-        finally:
-            db.close()
+    finally:
+        db.close()
     yield
 
 
-app = FastAPI(title="FulfillOS", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="FulfillOS", version="0.2.0", lifespan=lifespan)
 
 DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
 if DASHBOARD_DIR.exists():
@@ -73,7 +76,18 @@ def actor(authorization: str | None = Header(None), db: Session = Depends(get_db
 
 @app.get("/")
 def root():
-    return {"name": "FulfillOS", "version": "0.1.0", "dashboard": "/dashboard"}
+    return {"name": "FulfillOS", "version": "0.2.0", "dashboard": "/dashboard"}
+
+
+@app.get("/health")
+def health():
+    return {
+        "ok": True,
+        "version": "0.2.0",
+        "database": "configured",
+        "telemetry": "connected" if telemetry_ping() else "disabled_or_unavailable",
+        "server_time": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/dashboard")
@@ -138,12 +152,26 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
         device.app_version = req.app_version or device.app_version
         active = active_task_for_actor(db, user.id, device.id)
         current_task_id = active.id if active else None
+    mismatch = bool(req.current_task_id and req.current_task_id != current_task_id)
+    emit_telemetry(
+        "device_health",
+        {
+            "device_id": device.id,
+            "actor_id": user.id,
+            "status": device.status,
+            "app_version": device.app_version,
+            "current_task_id": current_task_id,
+            "client_reported_task_id": req.current_task_id,
+            "task_mismatch": mismatch,
+            "observed_at": datetime.now(timezone.utc),
+        },
+    )
     return {
         "ok": True,
         "server_time": datetime.now(timezone.utc).isoformat(),
         "current_task_id": current_task_id,
         "client_reported_task_id": req.current_task_id,
-        "task_mismatch": bool(req.current_task_id and req.current_task_id != current_task_id),
+        "task_mismatch": mismatch,
     }
 
 

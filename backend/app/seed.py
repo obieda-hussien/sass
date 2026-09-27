@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,6 +34,28 @@ def ensure_location(db: Session, location_id: str) -> Location:
     db.add(loc)
     db.flush()
     return loc
+
+
+def seed_bootstrap_users(db: Session) -> None:
+    specs = [
+        (
+            os.getenv("BOOTSTRAP_PICKER_USERNAME", "").strip(),
+            os.getenv("BOOTSTRAP_PICKER_PASSWORD", ""),
+            "PICKER",
+        ),
+        (
+            os.getenv("BOOTSTRAP_SUPERVISOR_USERNAME", "").strip(),
+            os.getenv("BOOTSTRAP_SUPERVISOR_PASSWORD", ""),
+            "SUPERVISOR",
+        ),
+    ]
+    for username, password, role in specs:
+        if not username or not password:
+            continue
+        existing = db.scalar(select(User).where(User.username == username))
+        if existing is None:
+            db.add(User(username=username, password_hash=hash_password(password), role=role))
+
 
 
 def seed_demo(db: Session) -> None:

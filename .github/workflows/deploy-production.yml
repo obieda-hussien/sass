@@ -1,0 +1,159 @@
+name: Deploy FulfillOS Production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fulfillos-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: production
+    env:
+      VERCEL_TEAM_ID: team_84bpGy4T8R2nJ83YAw9rL2m3
+      VERCEL_PROJECT: fulfillos
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      BOOTSTRAP_PICKER_PASSWORD: ${{ secrets.BOOTSTRAP_PICKER_PASSWORD }}
+      BOOTSTRAP_SUPERVISOR_PASSWORD: ${{ secrets.BOOTSTRAP_SUPERVISOR_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in VERCEL_TOKEN MONGODB_URI BOOTSTRAP_PICKER_PASSWORD BOOTSTRAP_SUPERVISOR_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+
+      - name: Install pinned Vercel CLI
+        run: npm install --global vercel@59.19.1
+
+      - name: Ensure Vercel project exists and link it
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! vercel project inspect "$VERCEL_PROJECT" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN" >/dev/null 2>&1; then
+            vercel project add "$VERCEL_PROJECT" --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+          fi
+          vercel link --yes --project "$VERCEL_PROJECT" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+
+      - name: Ensure Neon Postgres exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          resources="$(vercel integration list "$VERCEL_PROJECT" --integration neon --format=json --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN" 2>/dev/null || true)"
+          if ! printf '%s' "$resources" | grep -q 'fulfillos-postgres'; then
+            vercel integration add neon --name fulfillos-postgres --plan free -e production -e preview --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+          fi
+
+      - name: Sync FulfillOS production environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          project_json="$(vercel project inspect "$VERCEL_PROJECT" --format=json --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN")"
+          project_id="$(printf '%s' "$project_json" | jq -r '.id')"
+          test -n "$project_id"
+          test "$project_id" != "null"
+
+          jq -n --arg mongo "$MONGODB_URI" --arg picker "$BOOTSTRAP_PICKER_PASSWORD" --arg supervisor "$BOOTSTRAP_SUPERVISOR_PASSWORD" '[
+            {key:"MONGODB_URI", value:$mongo, type:"sensitive", target:["production","preview"]},
+            {key:"MONGODB_DATABASE", value:"fulfillos_telemetry", type:"plain", target:["production","preview"]},
+            {key:"DEMO_SEED", value:"0", type:"plain", target:["production","preview"]},
+            {key:"ACCESS_TOKEN_MINUTES", value:"30", type:"plain", target:["production","preview"]},
+            {key:"REFRESH_TOKEN_DAYS", value:"14", type:"plain", target:["production","preview"]},
+            {key:"BOOTSTRAP_PICKER_USERNAME", value:"picker", type:"plain", target:["production","preview"]},
+            {key:"BOOTSTRAP_PICKER_PASSWORD", value:$picker, type:"sensitive", target:["production","preview"]},
+            {key:"BOOTSTRAP_SUPERVISOR_USERNAME", value:"supervisor", type:"plain", target:["production","preview"]},
+            {key:"BOOTSTRAP_SUPERVISOR_PASSWORD", value:$supervisor, type:"sensitive", target:["production","preview"]}
+          ]' > /tmp/fulfillos-env.json
+
+          curl --fail-with-body --silent --show-error -X POST -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" --data-binary @/tmp/fulfillos-env.json "https://api.vercel.com/v10/projects/$project_id/env?teamId=$VERCEL_TEAM_ID&upsert=true" >/tmp/vercel-env-result.json
+          jq '{created, failed}' /tmp/vercel-env-result.json || true
+          rm -f /tmp/fulfillos-env.json /tmp/vercel-env-result.json
+
+      - name: Pull production configuration
+        run: vercel pull --yes --environment=production --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+
+      - name: Build Vercel production bundle
+        run: vercel build --prod --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+
+      - name: Deploy production
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(vercel deploy --prebuilt --prod --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN")"
+          printf '%s\n' "$output"
+          url="$(printf '%s\n' "$output" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -n 1)"
+          if [ -z "$url" ]; then
+            echo "::error::Could not determine production deployment URL"
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Verify production end to end
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="${{ steps.deploy.outputs.url }}"
+          curl --fail --retry 8 --retry-delay 3 "$url/api/health"
+          curl --fail --retry 5 --retry-delay 2 "$url/"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Build production-connected Android APKs
+        working-directory: android
+        env:
+          FULFILLOS_API_BASE_URL: ${{ steps.deploy.outputs.url }}/api
+        run: gradle --no-daemon :app:assembleDebug :app:assembleRelease
+
+      - name: Prepare production APK artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FulfillOS-v0.2.0-prod-debug.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist/FulfillOS-v0.2.0-prod-release.apk
+          printf '%s\n' "${{ steps.deploy.outputs.url }}" > dist/production-url.txt
+          sha256sum dist/*.apk > dist/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FulfillOS-v0.2.0-production-apks
+          path: |
+            dist/FulfillOS-v0.2.0-prod-debug.apk
+            dist/FulfillOS-v0.2.0-prod-release.apk
+            dist/production-url.txt
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "## FulfillOS Production"
+            echo "- URL: ${{ steps.deploy.outputs.url }}"
+            echo "- API health: ${{ steps.deploy.outputs.url }}/api/health"
+            echo "- Android artifacts: FulfillOS-v0.2.0-production-apks"
+          } >> "$GITHUB_STEP_SUMMARY"
