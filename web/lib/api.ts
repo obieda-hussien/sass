@@ -161,3 +161,68 @@ export async function issueTemporaryPassword(token: string, resetId: string) {
     token,
   );
 }
+
+
+export async function addAttendance(
+  token: string,
+  userId: string,
+  payload: {
+    scheduled_start_at: string;
+    clock_in_at: string;
+    clock_out_at?: string | null;
+    overtime_minutes: number;
+    status?: string;
+    notes?: string | null;
+  },
+) {
+  return jsonRequest<{
+    id: string;
+    late_minutes: number;
+    overtime_minutes: number;
+    status: string;
+  }>(
+    `/admin/employees/${userId}/attendance`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export async function addPerformanceEvent(
+  token: string,
+  userId: string,
+  payload: {
+    event_type: string;
+    order_id?: string | null;
+    task_id?: string | null;
+    minutes: number;
+    notes?: string | null;
+  },
+) {
+  return jsonRequest<{ id: string; event_type: string; occurred_at: string }>(
+    `/admin/employees/${userId}/performance-events`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export async function addPayAdjustment(
+  token: string,
+  userId: string,
+  payload: {
+    kind: string;
+    amount_cents: number;
+    reason: string;
+    approved: boolean;
+  },
+) {
+  return jsonRequest<{
+    id: string;
+    kind: string;
+    amount_cents: number;
+    approved: boolean;
+  }>(
+    `/admin/employees/${userId}/pay-adjustments`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
