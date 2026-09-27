@@ -44,7 +44,7 @@ from .services.sla import board_target_seconds, effective_elapsed_seconds
 from .services.fulfillment import FulfillmentError, complete_delivery, handoff_task, stage_task, start_pack_rack
 from .services.workforce import (
     MANAGER_ROLES, WorkforceError, add_pay_adjustment, create_employee, employee_payload,
-    issue_temporary_password, payroll_preview, record_attendance, record_performance,
+    issue_temporary_password, payroll_preview, promote_employee, record_attendance, record_performance,
     request_password_reset, update_employee,
 )
 from .telemetry import emit as emit_telemetry, ping as telemetry_ping
@@ -885,6 +885,44 @@ def admin_update_employee(user_id: str, req: EmployeeUpdateRequest, who=Depends(
                 raise HTTPException(404, "Employee not found")
             update_employee(db, user, req)
             return employee_payload(db, user)
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.post("/admin/employees/{user_id}/promote")
+def admin_promote_employee(
+    user_id: str,
+    req: PromotionRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    try:
+        with db.begin():
+            user = db.get(User, user_id)
+            if not user or not db.get(EmployeeProfile, user_id):
+                raise HTTPException(404, "Employee not found")
+            record = promote_employee(
+                db,
+                user=user,
+                to_role=req.to_role,
+                reason=req.reason,
+                approver_id=manager.id,
+                new_base_salary_cents=req.new_base_salary_cents,
+                effective_at=req.effective_at,
+            )
+            return {
+                "promotion_id": record.id,
+                "user_id": user.id,
+                "from_role": record.from_role,
+                "to_role": record.to_role,
+                "reason": record.reason,
+                "old_base_salary_cents": record.old_base_salary_cents,
+                "new_base_salary_cents": record.new_base_salary_cents,
+                "effective_at": record.effective_at.isoformat(),
+                "approved_by_user_id": record.approved_by_user_id,
+                "employee": employee_payload(db, user),
+            }
     except WorkforceError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
 
