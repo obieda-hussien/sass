@@ -43,6 +43,7 @@ def upgrade() -> None:
             sa.Column("name", sa.String(100), nullable=False),
             sa.Column("start_minute", sa.Integer(), nullable=False),
             sa.Column("end_minute", sa.Integer(), nullable=False),
+            sa.Column("timezone_name", sa.String(80), nullable=False, server_default="Africa/Cairo"),
             sa.Column("break_minutes", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("grace_minutes", sa.Integer(), nullable=False, server_default="10"),
             sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
