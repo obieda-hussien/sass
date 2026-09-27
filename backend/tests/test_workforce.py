@@ -88,6 +88,7 @@ def test_employee_payroll_and_password_recovery(db):
     assert preview["performance_events"]["LATE_SLAM"] == 1
     assert preview["estimated_total_cents"] == 108_500
     assert "do not automatically reduce pay" in preview["policy_note"]
+    db.commit()
 
     with db.begin():
         reset = request_password_reset(db, "picker@example.com")
