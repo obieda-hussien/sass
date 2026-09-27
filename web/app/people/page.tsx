@@ -10,6 +10,7 @@ import {
   getPasswordResets,
   issueTemporaryPassword,
   managerLogin,
+  promoteEmployee,
   type Employee,
   type PasswordResetItem,
 } from "../../lib/api";
@@ -29,6 +30,15 @@ type CreateForm = {
   overtime_rate: string;
   grace_minutes: string;
 };
+
+const promotionRanks = [
+  "PICKER",
+  "SENIOR_PICKER",
+  "QUALITY",
+  "QUALITY_LEADER",
+  "TEAM_LEADER",
+  "SUPERVISOR",
+] as const;
 
 const emptyForm: CreateForm = {
   username: "",
@@ -80,6 +90,11 @@ export default function PeoplePage() {
   const [adjustmentForm, setAdjustmentForm] = useState({
     kind: "MANUAL_ADJUSTMENT",
     amount: "",
+    reason: "",
+  });
+  const [promotionForm, setPromotionForm] = useState({
+    to_role: "SENIOR_PICKER",
+    new_base_salary: "",
     reason: "",
   });
 
@@ -236,6 +251,39 @@ export default function PeoplePage() {
     }
   }
 
+  async function submitPromotion(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee?.profile) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await promoteEmployee(token, selectedEmployee.user_id, {
+        to_role: promotionForm.to_role,
+        reason: promotionForm.reason,
+        new_base_salary_cents: promotionForm.new_base_salary
+          ? Math.round(Number(promotionForm.new_base_salary) * 100)
+          : null,
+      });
+      setNotice(
+        `Promotion approved: ${result.from_role} → ${result.to_role}` +
+          (result.new_base_salary_cents !== result.old_base_salary_cents
+            ? ` · salary ${money(result.old_base_salary_cents)} → ${money(result.new_base_salary_cents)}`
+            : ""),
+      );
+      setPromotionForm({
+        to_role: "SENIOR_PICKER",
+        new_base_salary: "",
+        reason: "",
+      });
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not approve promotion");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitAdjustment(event: FormEvent) {
     event.preventDefault();
     if (!token || !selectedEmployee) return;
@@ -375,10 +423,9 @@ export default function PeoplePage() {
             <label>
               <span>Role</span>
               <select value={form.role} onChange={(e) => setForm({...form, role:e.target.value})}>
-                <option>PICKER</option>
+                {promotionRanks.map((role) => <option key={role}>{role}</option>)}
                 <option>RECEIVER</option>
                 <option>INVENTORY</option>
-                <option>SUPERVISOR</option>
               </select>
             </label>
             <label><span>Job title</span><input value={form.job_title} onChange={(e) => setForm({...form, job_title:e.target.value})} /></label>
@@ -515,6 +562,57 @@ export default function PeoplePage() {
               <label><span>Notes</span><input value={performanceForm.notes} onChange={(e) => setPerformanceForm({...performanceForm, notes:e.target.value})} /></label>
               <button className="primaryButton" disabled={busy}>Record event</button>
               <p className="policyNote">Operational events are evidence for human review; they do not automatically change pay.</p>
+            </form>
+
+            <form className="managerForm" onSubmit={submitPromotion}>
+              <h3>Promotion & rank</h3>
+              <p className="policyNote">
+                Ladder: Picker → Senior Picker → Quality → Quality Leader → Team Leader → Supervisor.
+                Promotions are never automatic; this action records who approved it, why, when, and any salary change.
+              </p>
+              <label>
+                <span>Promote to</span>
+                <select
+                  value={promotionForm.to_role}
+                  onChange={(e) => setPromotionForm({...promotionForm, to_role:e.target.value})}
+                >
+                  {promotionRanks.map((role) => (
+                    <option key={role} value={role}>{role.replaceAll("_", " ")}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>New base salary (EGP) <small>(blank = keep current)</small></span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={promotionForm.new_base_salary}
+                  onChange={(e) => setPromotionForm({...promotionForm, new_base_salary:e.target.value})}
+                />
+              </label>
+              <label>
+                <span>Promotion reason</span>
+                <input
+                  required
+                  value={promotionForm.reason}
+                  onChange={(e) => setPromotionForm({...promotionForm, reason:e.target.value})}
+                  placeholder="Performance, quality ownership, leadership readiness…"
+                />
+              </label>
+              <button className="primaryButton" disabled={busy}>Approve promotion</button>
+              {selectedEmployee.promotion_history.length > 0 && (
+                <div className="promotionHistory">
+                  <strong>Promotion history</strong>
+                  {selectedEmployee.promotion_history.slice(0, 6).map((promotion) => (
+                    <small key={promotion.id}>
+                      {promotion.from_role.replaceAll("_", " ")} → {promotion.to_role.replaceAll("_", " ")}
+                      {" · "}{new Date(promotion.effective_at).toLocaleDateString()}
+                      {" · "}{promotion.reason}
+                    </small>
+                  ))}
+                </div>
+              )}
             </form>
 
             <form className="managerForm" onSubmit={submitAdjustment}>
