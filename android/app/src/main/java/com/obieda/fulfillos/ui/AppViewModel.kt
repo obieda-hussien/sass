@@ -102,6 +102,30 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         }
     }
 
+    fun forgotPassword() {
+        val identifier = usernameInput.trim()
+        if (identifier.isBlank() || busy) {
+            errorMessage = "Enter your username first"
+            return
+        }
+        busy = true
+        errorMessage = null
+        message = "Requesting password reset…"
+        worker.execute {
+            val response = runCatching { graph.api.forgotPassword(identifier) }
+                .getOrElse { ApiClient.Result(599, it.message.orEmpty()) }
+            ui {
+                busy = false
+                if (response.ok) {
+                    message = "Reset request sent • ask a supervisor for the temporary password"
+                } else {
+                    errorMessage = "Could not request password reset (" + response.code + ")"
+                    message = "Password reset unavailable"
+                }
+            }
+        }
+    }
+
     fun login() {
         if (usernameInput.isBlank() || passwordInput.isBlank() || busy) return
         busy = true

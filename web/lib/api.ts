@@ -29,3 +29,200 @@ export async function getSummary(signal?: AbortSignal): Promise<Summary> {
   }
   return response.json();
 }
+
+
+export type PayrollPreview = {
+  period: string;
+  currency: string;
+  base_salary_cents: number;
+  overtime_minutes: number;
+  overtime_pay_cents: number;
+  approved_adjustments_cents: number;
+  estimated_total_cents: number;
+  late_minutes: number;
+  completed_orders: number;
+  performance_events: Record<string, number>;
+  policy_note: string;
+};
+
+export type Employee = {
+  user_id: string;
+  username: string;
+  role: string;
+  active: boolean;
+  profile: {
+    employee_code: string;
+    full_name: string;
+    email: string | null;
+    phone: string | null;
+    address: string | null;
+    job_title: string;
+    department: string;
+    hire_date: string | null;
+    employment_status: string;
+    currency: string;
+    base_salary_cents: number;
+    overtime_rate_cents_per_hour: number;
+    scheduled_start_minutes: number | null;
+    grace_minutes: number;
+    notes: string | null;
+  } | null;
+  payroll: PayrollPreview | null;
+  temporary_password?: string | null;
+};
+
+export type PasswordResetItem = {
+  id: string;
+  user_id: string;
+  username: string | null;
+  full_name: string | null;
+  requested_at: string;
+  status: string;
+};
+
+async function jsonRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  token?: string,
+): Promise<T> {
+  const headers = new Headers(init.headers);
+  headers.set("Content-Type", "application/json");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(apiUrl(path), {
+    ...init,
+    headers,
+    cache: "no-store",
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = body?.detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : detail?.message ?? body?.message ?? `Request failed: ${response.status}`;
+    throw new Error(message);
+  }
+  return body as T;
+}
+
+export async function managerLogin(username: string, password: string) {
+  return jsonRequest<{
+    access_token: string;
+    refresh_token: string;
+    username: string;
+    role: string;
+  }>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      username,
+      password,
+      device_id: "WEB-CONTROL-TOWER",
+      app_version: "web-0.2.1",
+    }),
+  });
+}
+
+export async function getEmployees(token: string, period?: string) {
+  const suffix = period ? `?period=${encodeURIComponent(period)}` : "";
+  return jsonRequest<{ employees: Employee[] }>(
+    `/admin/employees${suffix}`,
+    {},
+    token,
+  );
+}
+
+export async function createEmployee(
+  token: string,
+  payload: Record<string, unknown>,
+) {
+  return jsonRequest<Employee>(
+    "/admin/employees",
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export async function getPasswordResets(token: string) {
+  return jsonRequest<{ requests: PasswordResetItem[] }>(
+    "/admin/password-resets",
+    {},
+    token,
+  );
+}
+
+export async function issueTemporaryPassword(token: string, resetId: string) {
+  return jsonRequest<{
+    resolved: boolean;
+    temporary_password: string;
+    warning: string;
+  }>(
+    `/admin/password-resets/${resetId}/issue-temporary-password`,
+    { method: "POST", body: JSON.stringify({}) },
+    token,
+  );
+}
+
+
+export async function addAttendance(
+  token: string,
+  userId: string,
+  payload: {
+    scheduled_start_at: string;
+    clock_in_at: string;
+    clock_out_at?: string | null;
+    overtime_minutes: number;
+    status?: string;
+    notes?: string | null;
+  },
+) {
+  return jsonRequest<{
+    id: string;
+    late_minutes: number;
+    overtime_minutes: number;
+    status: string;
+  }>(
+    `/admin/employees/${userId}/attendance`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export async function addPerformanceEvent(
+  token: string,
+  userId: string,
+  payload: {
+    event_type: string;
+    order_id?: string | null;
+    task_id?: string | null;
+    minutes: number;
+    notes?: string | null;
+  },
+) {
+  return jsonRequest<{ id: string; event_type: string; occurred_at: string }>(
+    `/admin/employees/${userId}/performance-events`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export async function addPayAdjustment(
+  token: string,
+  userId: string,
+  payload: {
+    kind: string;
+    amount_cents: number;
+    reason: string;
+    approved: boolean;
+  },
+) {
+  return jsonRequest<{
+    id: string;
+    kind: string;
+    amount_cents: number;
+    approved: boolean;
+  }>(
+    `/admin/employees/${userId}/pay-adjustments`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}

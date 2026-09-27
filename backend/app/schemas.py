@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 from pydantic import BaseModel, Field
 
@@ -160,3 +161,83 @@ class RecoveryStowRequest(BaseModel):
     product_id: str
     qty: int = Field(gt=0)
     destination_location_id: str
+
+
+
+class ForgotPasswordRequest(BaseModel):
+    identifier: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=10, max_length=128)
+
+
+class EmployeeCreateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=80)
+    password: str | None = Field(default=None, min_length=10, max_length=128)
+    role: str = "PICKER"
+    employee_code: str = Field(min_length=2, max_length=40)
+    full_name: str = Field(min_length=2, max_length=160)
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    job_title: str = "Picker"
+    department: str = "Operations"
+    hire_date: date | None = None
+    employment_status: str = "ACTIVE"
+    currency: str = "EGP"
+    base_salary_cents: int = Field(default=0, ge=0)
+    overtime_rate_cents_per_hour: int = Field(default=0, ge=0)
+    scheduled_start_minutes: int | None = Field(default=None, ge=0, le=1439)
+    grace_minutes: int = Field(default=10, ge=0, le=240)
+    notes: str | None = None
+
+
+class EmployeeUpdateRequest(BaseModel):
+    role: str | None = None
+    active: bool | None = None
+    full_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    job_title: str | None = None
+    department: str | None = None
+    hire_date: date | None = None
+    employment_status: str | None = None
+    currency: str | None = None
+    base_salary_cents: int | None = Field(default=None, ge=0)
+    overtime_rate_cents_per_hour: int | None = Field(default=None, ge=0)
+    scheduled_start_minutes: int | None = Field(default=None, ge=0, le=1439)
+    grace_minutes: int | None = Field(default=None, ge=0, le=240)
+    notes: str | None = None
+
+
+class AttendanceCreateRequest(BaseModel):
+    scheduled_start_at: datetime
+    clock_in_at: datetime
+    clock_out_at: datetime | None = None
+    overtime_minutes: int = Field(default=0, ge=0)
+    status: str = "APPROVED"
+    notes: str | None = None
+
+
+class PerformanceEventCreateRequest(BaseModel):
+    event_type: str
+    order_id: str | None = None
+    task_id: str | None = None
+    minutes: int = Field(default=0, ge=0)
+    source: str = "MANUAL"
+    notes: str | None = None
+    occurred_at: datetime | None = None
+
+
+class PayAdjustmentCreateRequest(BaseModel):
+    kind: str = "ADJUSTMENT"
+    amount_cents: int
+    reason: str = Field(min_length=2, max_length=240)
+    approved: bool = False
+
+
+class TemporaryPasswordRequest(BaseModel):
+    password: str | None = Field(default=None, min_length=10, max_length=128)

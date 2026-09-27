@@ -13,16 +13,20 @@ from sqlalchemy.orm import Session
 from .database import Base, engine, get_db
 from .location_parser import parse_location
 from .models import (
-    Barcode, Device, DowntimeSegment, InventoryBalance, Location, Order, OrderLine,
+    AttendanceEntry, Barcode, Device, DowntimeSegment, EmployeeProfile, InventoryBalance, Location,
+    Order, OrderLine, PasswordResetRequest, PayAdjustment, PerformanceEvent, SessionToken,
     CycleCountSession, OrderStatus, PickTask, Product, TaskStatus, UnpackSession, User,
 )
 from .schemas import (
     BOHMoveRequest, CancelRequest, CycleCountApplyRequest, CycleCountLineRequest, CycleCountStartRequest,
     DamageRequest, DowntimeRequest, HeartbeatRequest, InventoryMoveRequest, LoginRequest, OrderCreate,
-    HandoffRequest, PickScanRequest, ReceiveRequest, RecoveryStowRequest, RefreshRequest, RejectOfferRequest,
-    ShortPickRequest, StageRequest, SyncBatchRequest, TaskOfferRequest, UnpackScanRequest, UnpackStartRequest,
+    AttendanceCreateRequest, ChangePasswordRequest, EmployeeCreateRequest, EmployeeUpdateRequest,
+    ForgotPasswordRequest, HandoffRequest, PayAdjustmentCreateRequest, PerformanceEventCreateRequest,
+    PickScanRequest, ReceiveRequest, RecoveryStowRequest, RefreshRequest, RejectOfferRequest,
+    ShortPickRequest, StageRequest, SyncBatchRequest, TaskOfferRequest, TemporaryPasswordRequest,
+    UnpackScanRequest, UnpackStartRequest,
 )
-from .security import authenticate_access, issue_session, refresh_session, verify_password
+from .security import authenticate_access, hash_password, issue_session, refresh_session, verify_password
 from .seed import ensure_location, seed_bootstrap_users, seed_demo
 from .services.allocation import AllocationError, allocate_order
 from .services.inventory import InventoryError, move_inventory
@@ -36,6 +40,11 @@ from .services.operations import (
 )
 from .services.sla import board_target_seconds, effective_elapsed_seconds
 from .services.fulfillment import FulfillmentError, complete_delivery, handoff_task, stage_task, start_pack_rack
+from .services.workforce import (
+    MANAGER_ROLES, WorkforceError, add_pay_adjustment, create_employee, employee_payload,
+    issue_temporary_password, payroll_preview, record_attendance, record_performance,
+    request_password_reset, update_employee,
+)
 from .telemetry import emit as emit_telemetry, ping as telemetry_ping
 
 @asynccontextmanager
@@ -97,6 +106,13 @@ def actor(authorization: str | None = Header(None), db: Session = Depends(get_db
     return user, device
 
 
+def manager_actor(who=Depends(actor)) -> tuple[User, Device]:
+    user, device = who
+    if user.role.upper() not in MANAGER_ROLES:
+        raise HTTPException(403, "Supervisor or admin role required")
+    return user, device
+
+
 @app.get("/")
 def root():
     return {"name": "FulfillOS", "version": "0.2.0", "dashboard": "/dashboard"}
@@ -134,7 +150,7 @@ def dashboard_file():
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     with db.begin():
         user = db.scalar(select(User).where(User.username == req.username))
-        if not user or not verify_password(req.password, user.password_hash):
+        if not user or not user.active or not verify_password(req.password, user.password_hash):
             raise HTTPException(401, "Invalid credentials")
         device = db.get(Device, req.device_id)
         if device is None:
@@ -171,6 +187,30 @@ def refresh(req: RefreshRequest, db: Session = Depends(get_db)):
             "role": user.role,
             "device_id": record.device_id,
         }
+
+
+@app.post("/auth/forgot-password", status_code=202)
+def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    # Deliberately generic: never reveal whether a username/email exists.
+    with db.begin():
+        request_password_reset(db, req.identifier)
+    return {"accepted": True, "message": "If the account exists, a supervisor can issue a temporary password."}
+
+
+@app.post("/auth/change-password")
+def change_password(req: ChangePasswordRequest, who=Depends(actor), db: Session = Depends(get_db)):
+    user, _ = who
+    with db.begin():
+        user = db.get(User, user.id)
+        if not user or not verify_password(req.current_password, user.password_hash):
+            raise HTTPException(400, "Current password is incorrect")
+        if req.current_password == req.new_password:
+            raise HTTPException(400, "New password must be different")
+        user.password_hash = hash_password(req.new_password)
+        sessions = db.scalars(select(SessionToken).where(SessionToken.user_id == user.id)).all()
+        for session in sessions:
+            session.revoked = True
+    return {"changed": True, "reauthentication_required": True}
 
 
 @app.post("/devices/heartbeat")
@@ -763,6 +803,143 @@ def dashboard_summary(db: Session = Depends(get_db)):
         "orders_recovery_required": db.scalar(select(func.count()).select_from(Order).where(Order.recovery_required == True)) or 0,  # noqa: E712
         "active_tasks": active,
     }
+
+
+@app.get("/admin/employees")
+def admin_employees(period: str | None = None, who=Depends(manager_actor), db: Session = Depends(get_db)):
+    users = db.scalars(
+        select(User)
+        .join(EmployeeProfile, EmployeeProfile.user_id == User.id)
+        .order_by(EmployeeProfile.full_name)
+    ).all()
+    return {"employees": [employee_payload(db, user, period=period) for user in users]}
+
+
+@app.post("/admin/employees", status_code=201)
+def admin_create_employee(req: EmployeeCreateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+    manager, _ = who
+    try:
+        with db.begin():
+            user, generated_password = create_employee(db, req)
+            payload = employee_payload(db, user)
+            payload["temporary_password"] = generated_password
+            payload["created_by"] = manager.id
+            return payload
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.get("/admin/employees/{user_id}")
+def admin_employee_detail(user_id: str, period: str | None = None, who=Depends(manager_actor), db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if not user or not db.get(EmployeeProfile, user_id):
+        raise HTTPException(404, "Employee not found")
+    return employee_payload(db, user, period=period)
+
+
+@app.patch("/admin/employees/{user_id}")
+def admin_update_employee(user_id: str, req: EmployeeUpdateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+    try:
+        with db.begin():
+            user = db.get(User, user_id)
+            if not user:
+                raise HTTPException(404, "Employee not found")
+            update_employee(db, user, req)
+            return employee_payload(db, user)
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.post("/admin/employees/{user_id}/attendance", status_code=201)
+def admin_add_attendance(user_id: str, req: AttendanceCreateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+    manager, _ = who
+    try:
+        with db.begin():
+            if not db.get(EmployeeProfile, user_id):
+                raise HTTPException(404, "Employee not found")
+            entry = record_attendance(db, user_id, req, manager.id)
+            return {
+                "id": entry.id,
+                "late_minutes": entry.late_minutes,
+                "overtime_minutes": entry.overtime_minutes,
+                "status": entry.status,
+            }
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.post("/admin/employees/{user_id}/performance-events", status_code=201)
+def admin_add_performance_event(user_id: str, req: PerformanceEventCreateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+    with db.begin():
+        if not db.get(EmployeeProfile, user_id):
+            raise HTTPException(404, "Employee not found")
+        event = record_performance(db, user_id, req)
+        return {"id": event.id, "event_type": event.event_type, "occurred_at": event.occurred_at.isoformat()}
+
+
+@app.post("/admin/employees/{user_id}/pay-adjustments", status_code=201)
+def admin_add_pay_adjustment(user_id: str, req: PayAdjustmentCreateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+    manager, _ = who
+    with db.begin():
+        if not db.get(EmployeeProfile, user_id):
+            raise HTTPException(404, "Employee not found")
+        item = add_pay_adjustment(db, user_id, req, manager.id)
+        return {
+            "id": item.id,
+            "kind": item.kind,
+            "amount_cents": item.amount_cents,
+            "approved": item.approved,
+        }
+
+
+@app.get("/admin/employees/{user_id}/payroll-preview")
+def admin_payroll_preview(user_id: str, period: str | None = None, who=Depends(manager_actor), db: Session = Depends(get_db)):
+    try:
+        if not db.get(EmployeeProfile, user_id):
+            raise HTTPException(404, "Employee not found")
+        return payroll_preview(db, user_id, period)
+    except WorkforceError as e:
+        raise HTTPException(400, {"code": e.code, "message": str(e)})
+
+
+@app.get("/admin/password-resets")
+def admin_password_resets(who=Depends(manager_actor), db: Session = Depends(get_db)):
+    requests = db.scalars(
+        select(PasswordResetRequest)
+        .where(PasswordResetRequest.status == "PENDING")
+        .order_by(PasswordResetRequest.requested_at.asc())
+    ).all()
+    payload = []
+    for item in requests:
+        user = db.get(User, item.user_id)
+        profile = db.get(EmployeeProfile, item.user_id)
+        payload.append({
+            "id": item.id,
+            "user_id": item.user_id,
+            "username": user.username if user else None,
+            "full_name": profile.full_name if profile else None,
+            "requested_at": item.requested_at.isoformat(),
+            "status": item.status,
+        })
+    return {"requests": payload}
+
+
+@app.post("/admin/password-resets/{reset_id}/issue-temporary-password")
+def admin_issue_temporary_password(reset_id: str, req: TemporaryPasswordRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+    manager, _ = who
+    try:
+        with db.begin():
+            reset = db.get(PasswordResetRequest, reset_id)
+            if not reset or reset.status != "PENDING":
+                raise HTTPException(404, "Pending reset request not found")
+            password = issue_temporary_password(db, reset, manager.id, req.password)
+            return {
+                "resolved": True,
+                "temporary_password": password,
+                "warning": "Shown once. Give it to the employee securely and ask them to change it after login.",
+            }
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
 
 
 @app.get("/v1/control-tower/summary")

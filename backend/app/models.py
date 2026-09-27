@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -298,3 +298,76 @@ class AuditLog(Base):
     device_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+
+class EmployeeProfile(Base):
+    __tablename__ = "employee_profiles"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    employee_code: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    full_name: Mapped[str] = mapped_column(String(160))
+    email: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, unique=True, index=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    job_title: Mapped[str] = mapped_column(String(100), default="Picker")
+    department: Mapped[str] = mapped_column(String(100), default="Operations")
+    hire_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    employment_status: Mapped[str] = mapped_column(String(32), default="ACTIVE", index=True)
+    currency: Mapped[str] = mapped_column(String(8), default="EGP")
+    base_salary_cents: Mapped[int] = mapped_column(Integer, default=0)
+    overtime_rate_cents_per_hour: Mapped[int] = mapped_column(Integer, default=0)
+    scheduled_start_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    grace_minutes: Mapped[int] = mapped_column(Integer, default=10)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AttendanceEntry(Base):
+    __tablename__ = "attendance_entries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    scheduled_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    clock_in_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    clock_out_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    late_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    overtime_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(24), default="APPROVED", index=True)
+    source: Mapped[str] = mapped_column(String(32), default="MANUAL")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    approved_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PerformanceEvent(Base):
+    __tablename__ = "performance_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String(40), index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    task_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    minutes: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str] = mapped_column(String(32), default="MANUAL")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class PayAdjustment(Base):
+    __tablename__ = "pay_adjustments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(24), default="ADJUSTMENT")
+    amount_cents: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(String(240))
+    approved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    approved_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class PasswordResetRequest(Base):
+    __tablename__ = "password_reset_requests"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)

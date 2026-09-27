@@ -148,6 +148,13 @@ private fun LoginScreen(vm: AppViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                 )
+                TextButton(
+                    onClick = vm::forgotPassword,
+                    enabled = !vm.busy && vm.usernameInput.isNotBlank(),
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Text("Forgot password?")
+                }
                 vm.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Button(
                     onClick = vm::login,
