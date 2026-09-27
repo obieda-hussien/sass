@@ -1,105 +1,69 @@
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from .database import SessionLocal, create_schema
-from .models import Product
-from .services import adjust_inventory, create_product, ensure_location
-
-
-LOCATIONS = [
-    ("P-1-A101A110", None),
-    ("P-1-A101B110", None),
-    ("P-1-V112A110", "PRODUCE"),
-    ("P-1-R120D211", None),
-    ("P-1-H119C160", None),
-    ("P-1-C124A110", None),
-    ("P-1-F128A110", None),
-    ("P-1-HAZA123E110", "HAZ"),
-    ("P-1-HAZX119A110", "HAZ"),
-    ("TSCRET001", None),
-    ("TSCRETCHL01", None),
-    ("TSCRETFRZ01", None),
-    ("DMG", "DAMAGE"),
-    ("SPECIAL", "SPECIAL"),
-]
+from .location_parser import level_color, parse_location
+from .models import Barcode, Device, InventoryBalance, Location, Product, User
+from .security import hash_password
 
 
-PRODUCTS = [
-    ("MILK-1L", "Full Cream Milk 1L", "6222048703222", "CHILLED", "STANDARD"),
-    ("CHIPS-001", "Potato Chips", "6220000000001", "AMBIENT", "STANDARD"),
-    ("CABLE-USB-C", "USB-C Charging Cable", "6220000000002", "AMBIENT", "STANDARD"),
-    ("SPRAY-001", "Aerosol Spray", "6220000000003", "AMBIENT", "HAZ"),
-]
+def ensure_location(db: Session, location_id: str) -> Location:
+    existing = db.get(Location, location_id)
+    if existing:
+        return existing
+    p = parse_location(location_id)
+    loc = Location(
+        id=p.canonical,
+        floor=p.floor,
+        classification=p.classification,
+        fixture_type=p.fixture_type,
+        aisle=p.aisle,
+        level=p.level,
+        slot=p.slot,
+        temperature_class=p.temperature_class,
+        handling_class=p.handling_class,
+        logical=p.logical,
+        pickable=p.pickable,
+        stowable=p.stowable,
+        sellable=p.sellable,
+        color_code=level_color(p.level) if p.level else None,
+    )
+    db.add(loc)
+    db.flush()
+    return loc
 
 
-def seed() -> None:
-    create_schema()
-    db = SessionLocal()
-    try:
-        with db.begin():
-            for code, handling in LOCATIONS:
-                ensure_location(
-                    db,
-                    code,
-                    handling_class_override=handling,
-                    pickable=not code.startswith("TSCRET") and code not in {"DMG", "SPECIAL"},
-                )
+def seed_demo(db: Session) -> None:
+    if db.scalar(select(User).where(User.username == "picker1")) is None:
+        db.add(User(username="picker1", password_hash=hash_password("demo1234"), role="PICKER"))
+        db.add(User(username="supervisor", password_hash=hash_password("demo1234"), role="SUPERVISOR"))
+    if db.get(Device, "PDA-DEMO-001") is None:
+        db.add(Device(id="PDA-DEMO-001", trusted=True, app_version="0.1.0"))
 
-            for sku, title, barcode, temperature, handling in PRODUCTS:
-                if not db.scalar(select(Product).where(Product.sku == sku)):
-                    create_product(
-                        db,
-                        sku=sku,
-                        title=title,
-                        barcode=barcode,
-                        temperature_class=temperature,
-                        handling_class=handling,
-                    )
+    for loc in [
+        "P-1-A101A110", "P-1-A115E181", "P-1-V112A110", "P-1-D121B120",
+        "P-1-X115N112", "P-1-H119C160", "P-1-T113D120", "P-1-R120D211",
+        "P-1-C124A110", "P-1-F129F142", "P-1-HAZ-A123E110", "P-1-HAZ-X119T110",
+        "P-1-HRV132A110", "TSCRET001", "TSCRETCHL01", "TSCRETFRZ01", "DMG", "SPECIAL",
+    ]:
+        ensure_location(db, loc)
 
-            adjust_inventory(
-                db,
-                event_id="seed-milk",
-                product_sku="MILK-1L",
-                location_code="P-1-C124A110",
-                delta=20,
-                reason="SEED",
-                actor_id="system",
-                device_id=None,
-            )
-            adjust_inventory(
-                db,
-                event_id="seed-chips",
-                product_sku="CHIPS-001",
-                location_code="P-1-R120D211",
-                delta=60,
-                reason="SEED",
-                actor_id="system",
-                device_id=None,
-            )
-            adjust_inventory(
-                db,
-                event_id="seed-cable",
-                product_sku="CABLE-USB-C",
-                location_code="P-1-A101A110",
-                delta=25,
-                reason="SEED",
-                actor_id="system",
-                device_id=None,
-            )
-            adjust_inventory(
-                db,
-                event_id="seed-haz",
-                product_sku="SPRAY-001",
-                location_code="P-1-HAZA123E110",
-                delta=12,
-                reason="SEED",
-                actor_id="system",
-                device_id=None,
-            )
-    finally:
-        db.close()
-
-
-if __name__ == "__main__":
-    seed()
+    products = [
+        ("DEMO-AMBIENT-001", "Demo pasta", "AMBIENT", "STANDARD", "6220000000001", "P-1-A101A110", 40),
+        ("DEMO-PRODUCE-001", "Demo vegetables", "AMBIENT", "STANDARD", "6220000000002", "P-1-V112A110", 24),
+        ("DEMO-CHIPS-001", "Demo chips", "AMBIENT", "STANDARD", "6220000000003", "P-1-R120D211", 60),
+        ("DEMO-CHILLED-001", "Demo chilled milk", "CHILLED", "STANDARD", "6220000000004", "P-1-C124A110", 30),
+        ("DEMO-FROZEN-001", "Demo frozen item", "FROZEN", "STANDARD", "6220000000005", "P-1-F129F142", 20),
+        ("DEMO-HAZ-001", "Demo aerosol", "AMBIENT", "HAZ", "6220000000006", "P-1-HAZ-A123E110", 15),
+        ("DEMO-HRV-001", "Demo high-value accessory", "AMBIENT", "HRV", "6220000000007", "P-1-HRV132A110", 8),
+    ]
+    for asin, title, temp, handling, barcode, loc_id, qty in products:
+        product = db.scalar(select(Product).where(Product.asin == asin))
+        if product is None:
+            product = Product(asin=asin, title=title, temperature_class=temp, handling_class=handling)
+            db.add(product)
+            db.flush()
+            db.add(Barcode(code=barcode, product_id=product.id))
+            db.add(InventoryBalance(location_id=loc_id, product_id=product.id, qty_on_hand=qty, qty_reserved=0))
+    db.flush()

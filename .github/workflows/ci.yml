@@ -2,7 +2,6 @@ name: FulfillOS CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -10,25 +9,19 @@ permissions:
 
 jobs:
   backend:
-    name: Backend reliability tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: '3.13'
           cache: pip
-      - name: Install
-        run: pip install -e ".[dev]"
-      - name: Test
-        env:
-          DATABASE_URL: sqlite:///./ci.db
-        run: pytest
-      - name: Ruff
-        run: ruff check app tests
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Backend tests
+        working-directory: backend
+        run: pytest -q
 
   web:
     name: Control tower build
@@ -40,7 +33,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: '24'
           package-manager-cache: false
       - name: Install
         run: npm install
@@ -48,20 +41,20 @@ jobs:
         run: npm run lint
       - name: Build
         env:
-          NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
         run: npm run build
 
   android:
-    name: Android PDA compile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
       - uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: "9.6.0"
-      - name: Compile debug APK
-        run: gradle -p android :app:assembleDebug --stacktrace
+          gradle-version: '9.6.0'
+      - name: Android debug build
+        working-directory: android
+        run: gradle --no-daemon :app:assembleDebug

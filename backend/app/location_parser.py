@@ -1,105 +1,126 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-
-from .enums import HandlingClass, LocationKind, TemperatureClass
-
-
-PHYSICAL = re.compile(
-    r"^P-(?P<floor>\d+)-(?:(?P<hazard>HAZ)-?)?"
-    r"(?P<fixture>[AVDXHTRCF])(?P<aisle>\d{3})(?P<level>[A-Z])(?P<slot>\d{3})$"
-)
-
-SPECIALS: dict[str, tuple[LocationKind, TemperatureClass, HandlingClass]] = {
-    "TSCRET001": (LocationKind.UNPACK, TemperatureClass.AMBIENT, HandlingClass.STANDARD),
-    "TSCRETCHL01": (LocationKind.UNPACK, TemperatureClass.CHILLED, HandlingClass.STANDARD),
-    "TSCRETFRZ01": (LocationKind.UNPACK, TemperatureClass.FROZEN, HandlingClass.STANDARD),
-    "DMG": (LocationKind.DAMAGE, TemperatureClass.AMBIENT, HandlingClass.DAMAGE),
-    "SPECIAL": (LocationKind.SPECIAL, TemperatureClass.AMBIENT, HandlingClass.SPECIAL),
-}
-
-FIXTURE_TEMPERATURE = {
-    "C": TemperatureClass.CHILLED,
-    "F": TemperatureClass.FROZEN,
-}
-
-FIXTURE_HANDLING = {
-    "V": HandlingClass.PRODUCE,
-}
+import re
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ParsedLocation:
-    code: str
-    kind: LocationKind
-    floor: int | None
-    fixture: str | None
+    raw: str
+    canonical: str
+    floor: str | None
+    classification: str | None
+    fixture_type: str | None
     aisle: int | None
     level: str | None
     slot: int | None
-    temperature: TemperatureClass
-    handling: HandlingClass
+    temperature_class: str
+    handling_class: str
+    logical: bool
+    pickable: bool
+    stowable: bool
+    sellable: bool
+    description: str
 
 
-def parse_location(code: str) -> ParsedLocation:
-    normalized = code.strip().upper().replace(" ", "")
+FIXTURE_META = {
+    "A": ("AMBIENT", "STANDARD", "Ambient shelf"),
+    "V": ("AMBIENT", "STANDARD", "Produce / vegetables"),
+    "D": ("AMBIENT", "STANDARD", "Bulk / liquids shelf"),
+    "X": ("AMBIENT", "STANDARD", "Drawer storage"),
+    "H": ("AMBIENT", "STANDARD", "Hanging peg storage"),
+    "T": ("AMBIENT", "STANDARD", "Special metal/display shelf"),
+    "R": ("AMBIENT", "STANDARD", "Wire basket / chips storage"),
+    "C": ("CHILLED", "STANDARD", "Chilled storage"),
+    "F": ("FROZEN", "STANDARD", "Frozen storage"),
+}
 
-    if normalized in SPECIALS:
-        kind, temperature, handling = SPECIALS[normalized]
+SPECIAL = {
+    "TSCRET001": ParsedLocation("TSCRET001", "TSCRET001", None, "RETURNS", None, None, None, None, "AMBIENT", "RETURNS", True, False, True, False, "Temporary ambient unpack/returns tote"),
+    "TSCRETCHL01": ParsedLocation("TSCRETCHL01", "TSCRETCHL01", None, "RETURNS", None, None, None, None, "CHILLED", "RETURNS", True, False, True, False, "Temporary chilled unpack/returns tote"),
+    "TSCRETFRZ01": ParsedLocation("TSCRETFRZ01", "TSCRETFRZ01", None, "RETURNS", None, None, None, None, "FROZEN", "RETURNS", True, False, True, False, "Temporary frozen unpack/returns tote"),
+    "DMG": ParsedLocation("DMG", "DMG", None, "DAMAGE", None, None, None, None, "AMBIENT", "DAMAGE", True, False, True, False, "Damage/quarantine location"),
+    "SPECIAL": ParsedLocation("SPECIAL", "SPECIAL", None, "SPECIAL", None, None, None, None, "AMBIENT", "SPECIAL", True, False, True, False, "Special exception bin"),
+}
+
+# Accepts forms like P-1-A115E181, P-1-HAZ-A123E110, HAZ-X119T112.
+HRV_COMPACT = re.compile(r"^(?:P-(?P<floor>\d+)-)?HRV(?P<aisle>\d{3})(?P<level>[A-Z])(?P<slot>\d{3})$")
+
+PHYSICAL = re.compile(
+    r"^(?:(?P<prefix>P-(?P<floor>\d+)-))?"
+    r"(?:(?P<classification>HAZ|HRV)-)?"
+    r"(?P<fixture>[A-Z])(?P<aisle>\d{3})(?P<level>[A-Z])(?P<slot>\d{3})$"
+)
+
+
+def normalize(value: str) -> str:
+    return value.strip().upper().replace(" ", "").replace("_", "-")
+
+
+def parse_location(value: str) -> ParsedLocation:
+    raw = value
+    value = normalize(value)
+    if value in SPECIAL:
+        p = SPECIAL[value]
+        return ParsedLocation(raw, p.canonical, p.floor, p.classification, p.fixture_type, p.aisle, p.level, p.slot,
+                              p.temperature_class, p.handling_class, p.logical, p.pickable, p.stowable, p.sellable, p.description)
+
+    hrv = HRV_COMPACT.match(value)
+    if hrv:
+        floor = hrv.group("floor") or "1"
+        aisle = int(hrv.group("aisle"))
+        level = hrv.group("level")
+        slot = int(hrv.group("slot"))
         return ParsedLocation(
-            code=normalized,
-            kind=kind,
-            floor=None,
-            fixture=None,
-            aisle=None,
-            level=None,
-            slot=None,
-            temperature=temperature,
-            handling=handling,
+            raw=raw, canonical=f"P-{floor}-HRV{aisle:03d}{level}{slot:03d}", floor=floor,
+            classification="HRV", fixture_type=None, aisle=aisle, level=level, slot=slot,
+            temperature_class="AMBIENT", handling_class="HRV", logical=False, pickable=True,
+            stowable=True, sellable=True, description="High-value storage",
         )
 
-    match = PHYSICAL.fullmatch(normalized)
-    if not match:
-        raise ValueError(f"Unsupported location code: {code!r}")
+    m = PHYSICAL.match(value)
+    if not m:
+        raise ValueError(f"Unsupported location format: {raw}")
 
-    fixture = match.group("fixture")
-    handling = (
-        HandlingClass.HAZ
-        if match.group("hazard")
-        else FIXTURE_HANDLING.get(fixture, HandlingClass.STANDARD)
-    )
-    temperature = FIXTURE_TEMPERATURE.get(fixture, TemperatureClass.AMBIENT)
+    floor = m.group("floor") or "1"
+    classification = m.group("classification")
+    fixture = m.group("fixture")
+    aisle = int(m.group("aisle"))
+    level = m.group("level")
+    slot = int(m.group("slot"))
+
+    temp, handling, description = FIXTURE_META.get(fixture, ("AMBIENT", "STANDARD", "General physical storage"))
+    if classification == "HAZ":
+        handling = "HAZ"
+        description = f"Hazardous {description.lower()}"
+    elif classification == "HRV":
+        handling = "HRV"
+        description = f"High-value {description.lower()}"
+
+    canonical = f"P-{floor}-"
+    if classification:
+        canonical += f"{classification}-"
+    canonical += f"{fixture}{aisle:03d}{level}{slot:03d}"
 
     return ParsedLocation(
-        code=normalized,
-        kind=LocationKind.STORAGE,
-        floor=int(match.group("floor")),
-        fixture=fixture,
-        aisle=int(match.group("aisle")),
-        level=match.group("level"),
-        slot=int(match.group("slot")),
-        temperature=temperature,
-        handling=handling,
+        raw=raw,
+        canonical=canonical,
+        floor=floor,
+        classification=classification,
+        fixture_type=fixture,
+        aisle=aisle,
+        level=level,
+        slot=slot,
+        temperature_class=temp,
+        handling_class=handling,
+        logical=False,
+        pickable=True,
+        stowable=True,
+        sellable=True,
+        description=description,
     )
 
 
-def is_compatible(
-    *,
-    product_temperature: TemperatureClass,
-    product_handling: HandlingClass,
-    location: ParsedLocation,
-) -> bool:
-    if location.kind in {LocationKind.DAMAGE, LocationKind.SPECIAL}:
-        return True
-    if product_temperature != location.temperature:
-        return False
-    if product_handling == HandlingClass.HAZ and location.handling != HandlingClass.HAZ:
-        return False
-    if product_handling == HandlingClass.HRV and location.handling not in {
-        HandlingClass.HRV,
-        HandlingClass.SPECIAL,
-    }:
-        # HRV storage can be explicitly tagged in DB even if code grammar is site-specific.
-        return False
-    return True
+def level_color(level: str) -> str | None:
+    # Site-configurable. These first three are based on the observed local visual scheme.
+    return {"A": "GREEN", "B": "BLUE", "C": "YELLOW"}.get(level.upper())

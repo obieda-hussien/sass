@@ -1,31 +1,25 @@
 from __future__ import annotations
 
-from collections.abc import Generator
-
+import os
+from contextlib import contextmanager
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from .config import get_settings
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./fulfillos.db")
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine_kwargs = {"future": True, "echo": False, "connect_args": connect_args}
+if DATABASE_URL in {"sqlite:///:memory:", "sqlite://"}:
+    engine_kwargs["poolclass"] = StaticPool
+engine = create_engine(DATABASE_URL, **engine_kwargs)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-settings = get_settings()
-
-_engine_kwargs: dict[str, object] = {
-    "pool_pre_ping": True,
-    "future": True,
-}
-if settings.database_url.startswith("sqlite"):
-    _engine_kwargs["connect_args"] = {"check_same_thread": False}
-
-engine = create_engine(settings.database_url, **_engine_kwargs)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, class_=Session)
-
-
-def get_db() -> Generator[Session, None, None]:
+def get_db():
     db = SessionLocal()
     try:
         yield db
@@ -33,7 +27,11 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def create_schema() -> None:
-    from . import models  # noqa: F401
-
-    Base.metadata.create_all(bind=engine)
+@contextmanager
+def transaction():
+    db = SessionLocal()
+    try:
+        with db.begin():
+            yield db
+    finally:
+        db.close()

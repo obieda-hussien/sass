@@ -1,80 +1,112 @@
 # FulfillOS
 
-FulfillOS is a **clean-room micro-fulfillment execution platform** for fast grocery / dark-store operations.
+Clean-room micro-fulfillment execution system inspired by real warehouse workflows, without using proprietary source code, private endpoints, credentials, or brand assets.
 
-It is designed around the failure modes that matter on a real warehouse floor: flaky Wi-Fi, PDA restarts, duplicated scans, cancelled orders in the middle of a pick, inventory drift, temperature-aware storage, damage/quarantine, and the need to distinguish associate delay from system delay.
+This repository starts with the reliability layer first: inventory ledger, physical/logical locations, order allocation, idempotent pick events, cancellation recovery, device-bound sessions, downtime-aware SLA accounting, an Android PDA architecture, and a supervisor control tower.
 
-> This project is built from first principles and public warehouse concepts. It does not contain copied proprietary source code, private APIs, credentials, internal assets, or vendor branding.
+## Why this exists
 
-## Monorepo
+The core failure modes this design targets are:
 
-- `backend/` — FastAPI transactional execution API.
-- `web/` — Next.js control tower for supervisors.
-- `android/` — Kotlin + Jetpack Compose PDA client.
-- `docs/` — architecture, workflows, location grammar and reliability contracts.
-- `infra/` — local PostgreSQL / Redis / NATS stack.
-- `vercel.json` — Vercel Services configuration for the web control tower + API.
+- a scan appears locally but is not committed on the server;
+- network loss leaves the picker UI hanging until the user manually reopens another tool;
+- a PDA reboot or logout loses the active task;
+- an order can be cancelled mid-pick without an explicit recovery flow;
+- duplicate retries can increment inventory twice;
+- stale snapshots can send a picker backwards in the order;
+- SLA metrics can incorrectly charge technical downtime to the associate.
 
-## Reliability invariants
+FulfillOS treats those as architectural problems, not UI bugs.
 
-1. **Server-confirmed progress only.** A scan does not advance final progress until the server commits it.
-2. **Every mutating command has an idempotency key.** Replays are safe.
-3. **Inventory is a ledger, not a counter.** Every quantity change has an auditable movement.
-4. **Task state is versioned.** Stale clients cannot silently overwrite newer server state.
-5. **Cancellation is a state transition, never disappearance.** Mid-pick cancellation enters recovery.
-6. **Device restart is expected.** Re-auth + reconcile resumes from the last committed server state.
-7. **SLA attribution is explicit.** Network, device and system downtime are separated from associate active time.
+## Repository layout
 
-## Location model
-
-FulfillOS models physical and logical locations independently:
-
-- `A` ambient shelving
-- `V` produce
-- `D` bulk/liquids
-- `X` drawers
-- `H` hanging/pegboard
-- `T` special metal shelving
-- `R` bagged snacks/chips
-- `C` chilled
-- `F` frozen
-- `HAZ` hazardous handling class layered over fixture type
-- `HRV` high-value
-- `TSCRET001`, `TSCRETCHL01`, `TSCRETFRZ01` temporary unpack locations
-- `DMG` damaged/quarantine
-- `SPECIAL` exception holding
-
-Example: `P-1-A115E181` → floor P-1, ambient fixture A, aisle 115, level E, slot 181.
-
-## Local development
-
-```bash
-cp .env.example .env
-docker compose -f infra/docker-compose.yml up -d
-
-cd backend
-python -m venv .venv
-. .venv/bin/activate
-pip install -e ".[dev]"
-pytest
-uvicorn app.main:app --reload --port 8000
+```text
+backend/      FastAPI reference backend + SQLAlchemy ledger + tests
+web/          Next.js supervisor control tower
+dashboard/    Zero-dependency control-tower fallback
+android/      Kotlin/Jetpack Compose PDA client architecture
+docs/         Domain, reliability, location grammar and workflow specs
+infra/        Postgres/Redis/NATS local infrastructure
 ```
 
-In another shell:
+## Core invariants
+
+1. **The server-authoritative inventory ledger is the source of truth.**
+2. **Every inventory-changing client action has a globally unique event id.** Retrying the same event is safe.
+3. **The PDA persists an event before transmitting it.** A reboot cannot make the client forget an unacknowledged scan.
+4. **UI progress is server-confirmed progress.** Local attempts may be shown separately as `pending sync`.
+5. **A cancelled picked order becomes a recovery task.** Picked goods do not magically teleport back to source bins.
+6. **Task snapshots are versioned.** Out-of-order client sequences are rejected with an authoritative snapshot for reconciliation.
+7. **System/network/device downtime is measured separately from associate active time.**
+
+## Location examples
+
+The parser currently supports examples such as:
+
+```text
+P-1-A115E181
+P-1-V112A110
+P-1-R120D211
+P-1-H119C160
+P-1-X115N112
+P-1-C124A110
+P-1-F129F142
+P-1-HAZ-A123E110
+P-1-HAZ-X119T110
+P-1-HRV132A110
+TSCRET001
+TSCRETCHL01
+TSCRETFRZ01
+DMG
+SPECIAL
+```
+
+`HAZ` and `HRV` are modeled as handling/security classifications layered over the physical fixture type, rather than pretending they are the same dimension as `A`, `X`, `H`, etc.
+
+## Run the reference backend
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8080
+```
+
+Demo credentials:
+
+```text
+username: picker1
+password: demo1234
+device:   PDA-DEMO-001
+```
+
+Open `http://127.0.0.1:8080/dashboard` for the supervisor view.
+
+The default demo uses SQLite. Production should set `DATABASE_URL` to PostgreSQL and run schema migrations rather than `create_all`.
+
+## Tests
+
+```bash
+cd backend
+pytest -q
+```
+
+The first test suite covers location parsing, idempotent inventory movement, duplicate pick scans, sequence conflicts, mid-pick cancellation recovery, and downtime-aware SLA calculation.
+
+## Current status
+
+This is the first executable foundation, not the finished warehouse product. The next build slices are documented in `docs/ROADMAP.md`.
+
+
+## Supervisor web control tower
+
+The `web/` app is a Next.js control tower that consumes the compatibility read-model endpoint at `/v1/control-tower/summary`.
 
 ```bash
 cd web
 npm install
-npm run dev
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8080 npm run dev
 ```
 
-The web app calls the API through `/api` in Vercel and through `NEXT_PUBLIC_API_BASE_URL` locally.
-
-## Cloud direction
-
-- **Vercel**: excellent fit for the Next.js control tower and a stateless FastAPI service through Vercel Services.
-- **PostgreSQL**: primary source of truth for inventory, reservations, pick commits, task versions and audit movements.
-- **Redis / NATS**: optional low-latency cache + event transport for a long-running worker deployment.
-- **MongoDB Atlas**: optional secondary document/event read model; not required as the primary transactional store.
-
-See `docs/ARCHITECTURE.md` and `docs/RELIABILITY.md`.
+For Vercel Services, the web app is mounted at `/` and the FastAPI service at `/api`; see `vercel.json` and `docs/DEPLOYMENT.md`.

@@ -1,155 +1,162 @@
 from __future__ import annotations
 
-from datetime import datetime
-
+from typing import Any
 from pydantic import BaseModel, Field
 
 
-class ProductCreate(BaseModel):
-    sku: str
-    title: str
-    barcode: str
-    temperature_class: str = "AMBIENT"
-    handling_class: str = "STANDARD"
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    device_id: str
+    app_version: str | None = None
 
 
-class LocationCreate(BaseModel):
-    code: str
-    handling_class_override: str | None = None
-    pickable: bool = True
-    stowable: bool = True
-
-
-class InventoryAdjustRequest(BaseModel):
-    event_id: str
-    product_sku: str
-    location_code: str
-    delta: int
-    reason: str = "ADJUSTMENT"
-    actor_id: str | None = None
-    device_id: str | None = None
-
-
-class MoveRequest(BaseModel):
-    event_id: str
-    product_sku: str
-    source_location: str
-    destination_location: str
-    quantity: int = Field(gt=0)
-    reason: str = "BOH_MOVE"
-    actor_id: str | None = None
-    device_id: str | None = None
-
-
-class OrderLineCreate(BaseModel):
-    sku: str
-    quantity: int = Field(gt=0)
-
-
-class OrderCreate(BaseModel):
-    external_ref: str
-    lines: list[OrderLineCreate]
-    priority: int = 0
-
-
-class OfferRequest(BaseModel):
-    associate_id: str
-
-
-class AcceptTaskRequest(BaseModel):
-    associate_id: str
+class RefreshRequest(BaseModel):
+    refresh_token: str
     device_id: str
 
 
-class ScanPickRequest(BaseModel):
-    event_id: str
-    task_line_id: str
-    associate_id: str
+class SessionResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    user_id: str
+    username: str
+    role: str
     device_id: str
-    client_sequence: int = Field(ge=1)
-    client_task_version: int = Field(ge=1)
-    location_code: str
-    barcode: str
-    quantity: int = Field(gt=0)
-
-
-class ShortPickRequest(BaseModel):
-    event_id: str
-    task_line_id: str
-    associate_id: str
-    device_id: str
-    client_sequence: int = Field(ge=1)
-    client_task_version: int = Field(ge=1)
-    quantity: int = Field(gt=0)
-    reason: str
-
-
-class CancelTaskRequest(BaseModel):
-    reason: str
-    actor_id: str | None = None
-
-
-class StageRequest(BaseModel):
-    location_code: str
-    associate_id: str
-    device_id: str
-
-
-class HandoffRequest(BaseModel):
-    associate_id: str
-    device_id: str
-    rider_ref: str | None = None
 
 
 class HeartbeatRequest(BaseModel):
+    current_task_id: str | None = None
+    app_version: str | None = None
+    connectivity: str = "ONLINE"
+
+
+class InventoryMoveRequest(BaseModel):
+    event_id: str
+    product_id: str
+    qty: int = Field(gt=0)
+    source_location_id: str | None = None
+    destination_location_id: str | None = None
+    reason: str
+    order_id: str | None = None
+    task_id: str | None = None
+
+
+class OrderLineCreate(BaseModel):
+    product_id: str
+    qty: int = Field(gt=0)
+
+
+class OrderCreate(BaseModel):
+    external_ref: str | None = None
+    priority: int = 100
+    lines: list[OrderLineCreate]
+
+
+class TaskOfferRequest(BaseModel):
+    user_id: str
     device_id: str
-    associate_id: str
-    active_task_id: str | None = None
-    network_online: bool = True
-    client_time: datetime | None = None
+
+
+class RejectOfferRequest(BaseModel):
+    reason: str = "ASSOCIATE_REJECTED"
+
+
+class PickScanRequest(BaseModel):
+    event_id: str
+    client_seq: int = Field(gt=0)
+    task_item_id: str
+    location_id: str
+    product_id: str
+    qty: int = Field(gt=0)
+    barcode: str | None = None
+
+
+class SyncEvent(BaseModel):
+    event_id: str
+    client_seq: int
+    event_type: str = "PICK"
+    payload: dict[str, Any]
+
+
+class SyncBatchRequest(BaseModel):
+    task_id: str
+    events: list[SyncEvent]
+
+
+class CancelRequest(BaseModel):
+    reason: str = "CUSTOMER_CANCELLED"
 
 
 class DowntimeRequest(BaseModel):
-    event_id: str
     kind: str
-    task_id: str | None = None
-    associate_id: str | None = None
-    device_id: str | None = None
-    detail: str | None = None
-    ended: bool = False
+    source: str = "DEVICE"
 
 
-class ReconcileRequest(BaseModel):
-    device_id: str
-    associate_id: str
-    task_id: str | None = None
-    last_known_version: int | None = None
-    pending_event_ids: list[str] = []
-
-
-class UnpackRequest(BaseModel):
+class ReceiveRequest(BaseModel):
     event_id: str
-    product_sku: str
-    quantity: int = Field(gt=0)
+    product_id: str
+    qty: int = Field(gt=0)
+    destination_location_id: str
+
+
+class UnpackStartRequest(BaseModel):
     temperature_class: str
-    actor_id: str
-    device_id: str
+
+
+class UnpackScanRequest(BaseModel):
+    event_id: str
+    product_id: str
+    qty: int = Field(gt=0)
+
+
+class BOHMoveRequest(BaseModel):
+    event_id: str
+    product_id: str
+    qty: int = Field(gt=0)
+    source_location_id: str
+    destination_location_id: str
 
 
 class DamageRequest(BaseModel):
     event_id: str
-    product_sku: str
-    source_location: str
-    quantity: int = Field(gt=0)
+    product_id: str
+    qty: int = Field(gt=0)
+    source_location_id: str
     reason: str
-    actor_id: str
-    device_id: str
 
 
-class CountRequest(BaseModel):
+class CycleCountStartRequest(BaseModel):
+    location_id: str
+
+
+class CycleCountLineRequest(BaseModel):
+    product_id: str
+    counted_qty: int = Field(ge=0)
+
+
+class CycleCountApplyRequest(BaseModel):
+    reason: str = "CYCLE_COUNT_ADJUSTMENT"
+
+
+class StageRequest(BaseModel):
+    stage_location_id: str
+
+
+class HandoffRequest(BaseModel):
+    handoff_ref: str
+
+
+class ShortPickRequest(BaseModel):
     event_id: str
-    product_sku: str
-    location_code: str
-    counted_quantity: int = Field(ge=0)
-    actor_id: str
-    device_id: str
+    client_seq: int = Field(gt=0)
+    task_item_id: str
+    qty: int = Field(gt=0)
+    reason: str = "MISSING_AT_LOCATION"
+
+
+class RecoveryStowRequest(BaseModel):
+    event_id: str
+    product_id: str
+    qty: int = Field(gt=0)
+    destination_location_id: str

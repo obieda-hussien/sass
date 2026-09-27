@@ -1,50 +1,86 @@
 # Location grammar
 
-Location codes are parsed into structured metadata rather than treated as opaque strings.
+## Goals
 
-## Physical storage
+A location identifier should encode enough physical context for a human to navigate while the location-master record carries operational metadata that should not be guessed from text alone.
 
-Typical form:
+## Canonical physical form
 
 ```text
-P-<floor>-<class?><fixture><aisle><level><slot>
+P-{floor}-{classification?}-{fixture}{aisle}{level}{slot}
 ```
 
 Examples:
 
-- `P-1-A115E181` — ambient shelf, aisle 115, level E, slot 181
-- `P-1-V112A110` — produce
-- `P-1-R120D211` — chips/bagged snack basket
-- `P-1-H119C160` — hanging fixture
-- `P-1-C124A110` — chilled
-- `P-1-F128A110` — frozen
-- `P-1-HAZA123E110` / `P-1-HAZ-A123E110` — hazardous + A fixture
-- `P-1-HAZX119A110` / `P-1-HAZ-X119A110` — hazardous + X drawer
+```text
+P-1-A115E181
+P-1-H119C160
+P-1-R120D211
+P-1-X115N112
+P-1-C124A110
+P-1-F129F142
+P-1-HAZ-A123E110
+P-1-HAZ-X119T110
+P-1-HRV132A110
+```
 
-The storage classification and fixture are separate dimensions; HAZ can therefore be layered on A or X.
+### Dimensions
 
-## Known fixture families
+`P-1`
+: Physical floor/site-space prefix.
 
-| Code | Meaning |
-| --- | --- |
-| A | ambient shelf |
-| V | produce |
-| D | bulk/liquids |
-| X | drawers |
-| H | hanging |
-| T | special metal shelving |
-| R | chips / bagged snacks |
-| C | chilled |
-| F | frozen |
+`classification`
+: Optional handling or security overlay such as `HAZ` or `HRV`.
 
-## Operational locations
+`fixture`
+: Physical storage form.
 
-- `TSCRET001` — ambient unpack
-- `TSCRETCHL01` — chilled unpack
-- `TSCRETFRZ01` — frozen unpack
-- `DMG` — damaged/quarantine
-- `SPECIAL` — unresolved exception holding
+`aisle`
+: Three-digit rack/aisle family.
 
-## Visual level cue
+`level`
+: Vertical level letter. Level labels can also have a site-configured color for fast visual acquisition.
 
-The physical rack level letters progress bottom-to-top and may be color-coded so the picker can identify the vertical level before reading the full label. FulfillOS stores `level` as data so a client can render the same visual cue.
+`slot`
+: Three-digit bin/position number.
+
+## Fixture semantics currently modeled
+
+| Fixture | Meaning |
+|---|---|
+| A | general ambient shelf |
+| V | produce / vegetables |
+| D | bulk/liquid-oriented shelf |
+| X | drawer storage |
+| H | hanging peg storage |
+| T | special metal/display shelf |
+| R | wire basket / bagged snacks and chips |
+| C | chilled storage |
+| F | frozen storage |
+
+The physical fixture and the handling classification are intentionally separate. For example, a hazardous product can be stored in an `A` shelf or an `X` drawer.
+
+## Logical workflow locations
+
+```text
+TSCRET001      temporary ambient unpack/returns
+TSCRETCHL01    temporary chilled unpack/returns
+TSCRETFRZ01    temporary frozen unpack/returns
+DMG            damaged / quarantined stock
+SPECIAL        exception location; exact site meaning is configurable
+PICKTOTE:{id}  virtual server-side location representing physically picked goods
+```
+
+Logical locations are real accounting locations even when they are not customer-pickable shelves.
+
+## Visual-level color
+
+The seed configuration knows only the confirmed initial mappings:
+
+```text
+A -> GREEN
+B -> BLUE
+C -> YELLOW
+```
+
+The rest must be loaded from site configuration rather than guessed.

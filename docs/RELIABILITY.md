@@ -1,58 +1,80 @@
-# Reliability contract
+# Reliability design
 
-The warehouse floor is treated as an unreliable network environment.
+## Failure: scan spinner after Wi-Fi drop
 
-## Scan protocol
+Bad behavior:
 
-Every mutating scan contains:
+```text
+request -> network disappears -> UI spins forever -> user opens another module to reset the client
+```
 
-- `event_id` — globally unique idempotency key
-- `client_sequence` — monotonic sequence within a task
-- `client_task_version` — optimistic concurrency token
-- `task_line_id`
-- associate/device identity
-- scanned bin
-- scanned barcode
-- quantity
+FulfillOS behavior:
 
-A successful response returns the new server task version.
+```text
+persist local event -> timeout -> mark PENDING_SYNC -> network observer reconnects
+-> refresh auth if needed -> batch sync -> reconcile snapshot
+```
 
-If the response is lost, the PDA keeps the event in durable local storage and calls reconcile. If the event already committed, it is marked complete locally. If not, it is replayed with the same event ID.
+The screen explicitly distinguishes `Offline`, `Reconnecting`, `Pending sync`, and `Server confirmed`.
 
-## Why this prevents "43 scans on PDA, 42 on server"
+## Failure: client says 43 units, server says 42
 
-The final counter shown as completed is derived from **committed task lines returned by the server**, not a local increment animation. The UI may display a temporary "syncing 1 scan" indicator, but it cannot claim the item is committed until acknowledged.
+FulfillOS never maintains an independent final counter. It maintains:
 
-## Cancellation
+```text
+attempted locally
+pending acknowledgement
+server-confirmed picked
+```
 
-Cancellation is never deletion.
+The main completion counter uses only the last category.
 
-- no committed picks → release reservations → `CANCELLED`
-- one or more committed picks → release unpicked reservations → `RECOVERY_REQUIRED`
+## Failure: duplicate retry
 
-The already-picked physical units remain represented in the ledger and the supervisor receives a recovery exception instead of silently losing the task.
+Every stock-changing command contains an `event_id` unique constraint. Repeating it is read-after-write, not a second mutation.
 
-## PDA restart/logout
+## Failure: stale response rolls the user backward
 
-The task belongs to server state, not process memory.
+- every task has `server_version`;
+- every client event has `client_seq`;
+- new, out-of-order sequences are rejected;
+- retries of known event ids are accepted idempotently;
+- conflict responses contain the authoritative snapshot;
+- the PDA replaces stale projections instead of merging them heuristically.
 
-After startup:
+## Failure: mid-order cancellation
 
-1. secure session refresh / explicit re-auth if policy requires it
-2. send device heartbeat
-3. call `/v1/sync/reconcile`
-4. restore active task from server
-5. resolve committed local pending IDs
-6. replay only unknown events
+A cancellation is an event and a state transition, not a disappearing task.
+
+If nothing has been physically picked, cancellation may close the task.
+
+If stock is already in the physical pick tote, the task becomes `RECOVERY_REQUIRED`. A worker must recover/stow those units explicitly. This preserves the physical/digital invariant.
+
+If handoff already happened, the system switches to a return-required workflow rather than claiming the picked stock is back on a shelf.
+
+## Failure: PDA reboot/logout
+
+The server owns the active task. The client owns a durable journal of unacknowledged events. A reboot can destroy neither.
+
+A secure refresh token is stored separately from the user's password and bound to the trusted device. Site policy may require an unlock/PIN/badge after reboot, but the system does not require the associate to reconstruct work state manually.
 
 ## SLA attribution
 
-Track wall time and attributable downtime separately:
+A single timer is insufficient. FulfillOS tracks wall time and accountable time.
 
-- associate active time
-- network offline
+```text
+wall_elapsed
+- approved network outage
+- backend wait
 - device recovery
 - system exception
-- explicit break/other activity
+= effective associate elapsed
+```
 
-Supervisor metrics should never label infrastructure downtime as associate picking delay.
+The observed local productivity board is represented by:
+
+```text
+target_minutes = ceil(2 * units / 3)
+```
+
+That policy is isolated in code so a site can replace it without changing the task engine.

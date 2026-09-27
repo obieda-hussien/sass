@@ -12,20 +12,23 @@ out/
 
 # Android / Gradle
 .gradle/
+build/
 **/build/
 local.properties
-*.jks
-*.keystore
-
-# IDE / OS
 .idea/
 .vscode/
+*.iml
+
+# OS
 .DS_Store
+Thumbs.db
 
 # Environment / secrets
 .env
 .env.*
 !.env.example
+*.jks
+*.keystore
 
 # Vercel
 .vercel/
