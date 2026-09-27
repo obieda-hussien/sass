@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
+from . import models_ops as _models_ops  # register v0.3 tables before create_all
 from .location_parser import parse_location
 from .models import (
     AttendanceEntry, Barcode, Device, DowntimeSegment, EmployeeProfile, InventoryBalance, Location,
@@ -46,6 +47,7 @@ from .services.workforce import (
     request_password_reset, update_employee,
 )
 from .telemetry import emit as emit_telemetry, ping as telemetry_ping
+from .ops_router import router as ops_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -82,8 +84,9 @@ class ApiPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
-app = FastAPI(title="FulfillOS", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="FulfillOS", version="0.3.0", lifespan=lifespan)
 app.add_middleware(ApiPrefixMiddleware)
+app.include_router(ops_router)
 # Router-level fallback for hosting layers that preserve the public /api prefix
 # but adapt the ASGI app in a way that bypasses outer middleware path mutation.
 app.mount("/api", app, name="api-prefix-alias")
@@ -115,7 +118,7 @@ def manager_actor(who=Depends(actor)) -> tuple[User, Device]:
 
 @app.get("/")
 def root():
-    return {"name": "FulfillOS", "version": "0.2.0", "dashboard": "/dashboard"}
+    return {"name": "FulfillOS", "version": "0.3.0", "dashboard": "/dashboard"}
 
 
 @app.get("/health")
@@ -131,7 +134,7 @@ def health():
     telemetry_status = "connected" if telemetry_ping() else "disabled_or_unavailable"
     return {
         "ok": database_status == "connected",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "database": database_status,
         "telemetry": telemetry_status,
         "server_time": datetime.now(timezone.utc).isoformat(),
@@ -376,8 +379,28 @@ def create_order(req: OrderCreate, who=Depends(actor), db: Session = Depends(get
         db.add(order)
         db.flush()
         for line in req.lines:
-            if not db.get(Product, line.product_id):
+            product = db.get(Product, line.product_id)
+            if not product:
                 raise HTTPException(400, f"Unknown product {line.product_id}")
+            # A fulfillment hold does not falsify physical inventory. It only
+            # removes blocked stock from what can be promised to new orders.
+            from .services.ops_platform import product_orderability
+            availability = product_orderability(db, line.product_id)
+            if (
+                availability["blocked_stock"] > 0
+                and availability["fulfillable_stock"] < line.qty
+            ):
+                raise HTTPException(
+                    409,
+                    {
+                        "code": "FULFILLMENT_ZONE_DISABLED",
+                        "message": "Requested quantity is temporarily unavailable for fulfillment",
+                        "product_id": line.product_id,
+                        "physical_stock": availability["physical_stock"],
+                        "fulfillable_stock": availability["fulfillable_stock"],
+                        "blocked_reasons": availability["blocked_reasons"],
+                    },
+                )
             db.add(OrderLine(order_id=order.id, product_id=line.product_id, requested_qty=line.qty))
         db.flush()
         return {"order_id": order.id, "status": order.status}
@@ -391,7 +414,22 @@ def allocate(order_id: str, who=Depends(actor), db: Session = Depends(get_db)):
             if not order:
                 raise HTTPException(404, "Order not found")
             task = allocate_order(db, order)
-            return task_snapshot(db, task)
+            snapshot = task_snapshot(db, task)
+            # In live operation, clocked-in AVAILABLE workers have runtime-state
+            # rows. When at least one exists, allocation immediately broadcasts
+            # the order; clean test/bootstrap environments keep legacy READY flow.
+            from .models_ops import WorkerRuntimeState
+            from .services.ops_platform import broadcast_task
+            available_workers = db.scalar(
+                select(func.count()).select_from(WorkerRuntimeState).where(
+                    WorkerRuntimeState.state == "AVAILABLE"
+                )
+            ) or 0
+            if available_workers:
+                dispatch = broadcast_task(db, task)
+                snapshot = task_snapshot(db, task)
+                snapshot["dispatch"] = dispatch
+            return snapshot
     except AllocationError as e:
         raise HTTPException(409, str(e))
 
