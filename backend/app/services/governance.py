@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import User
+from ..models import EmployeeProfile, User
 from ..models_ops import (
     ActivePickLease,
     AdminAuditEvent,
@@ -467,8 +467,7 @@ def assignment_for_clock_in(db: Session, user_id: str, at: datetime | None = Non
 def auto_clock_in(db: Session, *, user_id: str, at: datetime | None = None) -> dict[str, Any]:
     assignment = assignment_for_clock_in(db, user_id, at)
     template = db.get(ShiftTemplate, assignment.shift_template_id) if assignment.shift_template_id else None
-    user_profile = __import__("app.models", fromlist=["EmployeeProfile"]).EmployeeProfile
-    profile = db.get(user_profile, user_id)
+    profile = db.get(EmployeeProfile, user_id)
     old_grace = profile.grace_minutes if profile else None
     if profile and template:
         profile.grace_minutes = template.grace_minutes
