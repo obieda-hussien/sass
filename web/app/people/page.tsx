@@ -201,6 +201,21 @@ export default function PeoplePage() {
     [employees, selectedId],
   );
 
+  const promotionTargets = useMemo(() => {
+    if (!selectedEmployee) return [...promotionRanks];
+    const currentIndex = promotionRanks.indexOf(
+      selectedEmployee.role as (typeof promotionRanks)[number],
+    );
+    return currentIndex < 0 ? [...promotionRanks] : promotionRanks.slice(currentIndex + 1);
+  }, [selectedEmployee]);
+
+  useEffect(() => {
+    if (!selectedEmployee || promotionTargets.length === 0) return;
+    if (!promotionTargets.includes(promotionForm.to_role as (typeof promotionRanks)[number])) {
+      setPromotionForm((current) => ({...current, to_role: promotionTargets[0]}));
+    }
+  }, [selectedEmployee, promotionTargets, promotionForm.to_role]);
+
   async function submitAttendance(event: FormEvent) {
     event.preventDefault();
     if (!token || !selectedEmployee) return;
@@ -576,7 +591,7 @@ export default function PeoplePage() {
                   value={promotionForm.to_role}
                   onChange={(e) => setPromotionForm({...promotionForm, to_role:e.target.value})}
                 >
-                  {promotionRanks.map((role) => (
+                  {promotionTargets.map((role) => (
                     <option key={role} value={role}>{role.replaceAll("_", " ")}</option>
                   ))}
                 </select>
@@ -600,7 +615,9 @@ export default function PeoplePage() {
                   placeholder="Performance, quality ownership, leadership readiness…"
                 />
               </label>
-              <button className="primaryButton" disabled={busy}>Approve promotion</button>
+              <button className="primaryButton" disabled={busy || promotionTargets.length === 0}>
+                {promotionTargets.length === 0 ? "Highest warehouse rank" : "Approve promotion"}
+              </button>
               {selectedEmployee.promotion_history.length > 0 && (
                 <div className="promotionHistory">
                   <strong>Promotion history</strong>
