@@ -109,13 +109,29 @@ jobs:
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
-      - name: Verify production end to end
+      - name: Verify production end to end and resolve canonical URL
+        id: verify
         shell: bash
         run: |
           set -euo pipefail
-          url="${{ steps.deploy.outputs.url }}"
-          curl --fail --retry 8 --retry-delay 3 "$url/api/health"
-          curl --fail --retry 5 --retry-delay 2 "$url/"
+          deployment_url="${{ steps.deploy.outputs.url }}"
+
+          canonical_health_url="$(curl --fail --silent --show-error --location             --retry 8 --retry-delay 3             --output /tmp/health.json             --write-out '%{url_effective}'             "$deployment_url/api/health")"
+
+          jq -e '
+            .ok == true and
+            .version == "0.2.0" and
+            .database == "connected" and
+            .telemetry == "connected"
+          ' /tmp/health.json
+
+          canonical_url="${canonical_health_url%/api/health}"
+          test -n "$canonical_url"
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$canonical_url/" >/dev/null
+
+          echo "url=$canonical_url" >> "$GITHUB_OUTPUT"
+          echo "Production canonical URL: $canonical_url"
+          cat /tmp/health.json
 
       - uses: actions/setup-java@v5
         with:
@@ -129,7 +145,7 @@ jobs:
       - name: Build production-connected Android APKs
         working-directory: android
         env:
-          FULFILLOS_API_BASE_URL: ${{ steps.deploy.outputs.url }}/api
+          FULFILLOS_API_BASE_URL: ${{ steps.verify.outputs.url }}/api
         run: gradle --no-daemon :app:assembleDebug :app:assembleRelease
 
       - name: Prepare production APK artifacts
@@ -138,7 +154,7 @@ jobs:
           mkdir -p dist
           cp android/app/build/outputs/apk/debug/app-debug.apk dist/FulfillOS-v0.2.0-prod-debug.apk
           cp android/app/build/outputs/apk/release/app-release.apk dist/FulfillOS-v0.2.0-prod-release.apk
-          printf '%s\n' "${{ steps.deploy.outputs.url }}" > dist/production-url.txt
+          printf '%s\n' "${{ steps.verify.outputs.url }}" > dist/production-url.txt
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
@@ -156,7 +172,7 @@ jobs:
         run: |
           {
             echo "## FulfillOS Production"
-            echo "- URL: ${{ steps.deploy.outputs.url }}"
-            echo "- API health: ${{ steps.deploy.outputs.url }}/api/health"
+            echo "- URL: ${{ steps.verify.outputs.url }}"
+            echo "- API health: ${{ steps.verify.outputs.url }}/api/health"
             echo "- Android artifacts: FulfillOS-v0.2.0-production-apks"
           } >> "$GITHUB_STEP_SUMMARY"
