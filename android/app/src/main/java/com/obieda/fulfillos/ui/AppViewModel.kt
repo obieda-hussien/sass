@@ -12,6 +12,8 @@ import com.obieda.fulfillos.data.PickSyncResult
 import com.obieda.fulfillos.data.ScanBus
 import com.obieda.fulfillos.domain.AppScreen
 import com.obieda.fulfillos.domain.ConnectivityState
+import com.obieda.fulfillos.domain.ClosedBagSummary
+import com.obieda.fulfillos.domain.OrderCompletionSummary
 import com.obieda.fulfillos.domain.InventoryLookup
 import com.obieda.fulfillos.domain.LocationParser
 import com.obieda.fulfillos.domain.PickScanPhase
@@ -48,6 +50,11 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     var currentTask by mutableStateOf<TaskSnapshot?>(null)
         private set
     var scanPhase by mutableStateOf(PickScanPhase.BIN)
+        private set
+
+    var closedBags by mutableStateOf<List<ClosedBagSummary>>(emptyList())
+        private set
+    var completionSummary by mutableStateOf<OrderCompletionSummary?>(null)
         private set
 
     var inventoryQuery by mutableStateOf("")
@@ -160,6 +167,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         session = null
         authenticated = false
         currentTask = null
+        closedBags = emptyList()
+        completionSummary = null
         screen = AppScreen.HOME
         scanPhase = PickScanPhase.BIN
         message = "Signed out"
@@ -178,6 +187,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     fun openPick() {
         screen = AppScreen.PICK
         errorMessage = null
+        completionSummary = null
         if (currentTask == null) claimNext()
     }
 
@@ -185,23 +195,48 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         if (!authenticated || busy) return
         busy = true
         errorMessage = null
+        completionSummary = null
         message = "Looking for work…"
         worker.execute {
-            val response = callWithRefresh { graph.api.claimNextTask() }
-            val task = if (response.ok) runCatching { graph.api.parseTaskEnvelope(response.body) }.getOrNull() else null
+            // 1) Resume any direct assignment / active task owned by this picker.
+            val activeResponse = callWithRefresh { graph.api.getActiveTask() }
+            var task = if (activeResponse.ok) {
+                runCatching { graph.api.parseTaskEnvelope(activeResponse.body) }.getOrNull()
+            } else null
+
+            // 2) Broadcast pool: every eligible picker can see the offer, but the
+            // backend atomically lets only the first successful accept own it.
+            if (task == null) {
+                val offersResponse = callWithRefresh { graph.api.getMyOffers() }
+                if (offersResponse.ok) {
+                    task = runCatching { graph.api.parseFirstOffer(offersResponse.body) }.getOrNull()
+                }
+            }
+
+            // 3) Compatibility fallback for READY work not yet broadcast.
+            var fallback: ApiClient.Result? = null
+            if (task == null) {
+                fallback = callWithRefresh { graph.api.claimNextTask() }
+                if (fallback.ok) {
+                    task = runCatching { graph.api.parseTaskEnvelope(fallback.body) }.getOrNull()
+                }
+            }
+
             ui {
                 busy = false
-                if (response.code == 401) {
+                val authFailed = activeResponse.code == 401 || fallback?.code == 401
+                if (authFailed) {
                     expireSession()
-                } else if (!response.ok) {
-                    errorMessage = "Could not claim task (${response.code})"
-                    message = "Task service unavailable"
                 } else if (task == null) {
                     currentTask = null
-                    message = "No tasks available"
+                    message = "No orders available"
                 } else {
                     installTask(task)
-                    message = if (task.taskStatus == "OFFERED") "New order offered" else "Task resumed"
+                    message = when (task.taskStatus) {
+                        "OFFERED" -> "New order offered"
+                        "ACCEPTED", "PICKING" -> "Active order resumed"
+                        else -> "Order ready"
+                    }
                 }
             }
         }
@@ -295,6 +330,115 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         )
     }
 
+    fun skipCurrent(reason: String = "DEFERRED") {
+        val task = currentTask ?: return
+        val item = task.currentItem ?: return
+        if (scanPhase != PickScanPhase.ITEM || busy) {
+            message = "Confirm the bin before skipping this item"
+            return
+        }
+        submittingItemId = item.id
+        scanPhase = PickScanPhase.SYNCING
+        message = "Skip persisted • moving item to end of route"
+        graph.picks.createSkip(
+            taskId = task.taskId,
+            taskItemId = item.id,
+            locationId = item.locationId,
+            productId = item.productId,
+            reason = reason,
+            onResult = ::handlePickSync,
+        )
+    }
+
+    fun damagedCurrent(reason: String = "DAMAGED") {
+        val task = currentTask ?: return
+        val item = task.currentItem ?: return
+        if (scanPhase != PickScanPhase.ITEM || busy) {
+            message = "Confirm the bin before reporting damage"
+            return
+        }
+        submittingItemId = item.id
+        scanPhase = PickScanPhase.SYNCING
+        message = "Damage persisted • awaiting server ACK"
+        graph.picks.createDamaged(
+            taskId = task.taskId,
+            taskItemId = item.id,
+            locationId = item.locationId,
+            productId = item.productId,
+            qty = 1,
+            reason = reason,
+            onResult = ::handlePickSync,
+        )
+    }
+
+    fun closeBag(spooCode: String) {
+        val task = currentTask ?: return
+        if (task.taskStatus != "PICKED" || busy) {
+            message = "Finish picking before closing bags"
+            return
+        }
+        val code = spooCode.trim()
+        if (code.length < 4) {
+            errorMessage = "Invalid bag/SPOO barcode"
+            return
+        }
+        busy = true
+        errorMessage = null
+        message = "Closing bag…"
+        worker.execute {
+            val response = callWithRefresh { graph.api.closeBag(task.taskId, code) }
+            val bag = if (response.ok) runCatching { graph.api.parseClosedBag(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (bag != null) {
+                    if (closedBags.none { it.bagNo == bag.bagNo }) {
+                        closedBags = closedBags + bag
+                    }
+                    scannedValue = ""
+                    message = "Bag ${bag.bagNo} closed • SPOO ••••${bag.spooLast4}"
+                } else if (response.code == 401) {
+                    expireSession()
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                    message = "Bag was not closed"
+                }
+            }
+        }
+    }
+
+    fun finishPickedOrder() {
+        val task = currentTask ?: return
+        if (task.taskStatus != "PICKED" || busy) return
+        if (closedBags.isEmpty()) {
+            errorMessage = "Scan at least one bag SPOO first"
+            return
+        }
+        busy = true
+        errorMessage = null
+        message = "Finalizing order…"
+        worker.execute {
+            val response = callWithRefresh { graph.api.finishPicking(task.taskId) }
+            val summary = if (response.ok) runCatching { graph.api.parseCompletionSummary(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (summary != null) {
+                    completionSummary = summary
+                    currentTask = null
+                    closedBags = emptyList()
+                    scannedValue = ""
+                    scanPhase = PickScanPhase.BIN
+                    screen = AppScreen.PICK
+                    message = "Order complete"
+                } else if (response.code == 401) {
+                    expireSession()
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                    message = "Could not finalize order"
+                }
+            }
+        }
+    }
+
     fun retryPending() {
         val id = currentTask?.taskId ?: return
         if (connectivity != ConnectivityState.ONLINE) {
@@ -381,7 +525,11 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             message = "Waiting for server confirmation • do not rescan"
             return
         }
-        if (scanPhase == PickScanPhase.DONE || task.taskStatus == "PICKED") {
+        if (task.taskStatus == "PICKED") {
+            closeBag(value)
+            return
+        }
+        if (scanPhase == PickScanPhase.DONE) {
             message = "Pick already complete"
             return
         }
