@@ -25,6 +25,7 @@ jobs:
     env:
       VERCEL_TEAM_ID: team_84bpGy4T8R2nJ83YAw9rL2m3
       VERCEL_PROJECT: fulfillos
+      VERCEL_PRODUCTION_URL: https://fulfillos-nine.vercel.app
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       MONGODB_URI: ${{ secrets.MONGODB_URI }}
       BOOTSTRAP_PICKER_PASSWORD: ${{ secrets.BOOTSTRAP_PICKER_PASSWORD }}
@@ -109,24 +110,34 @@ jobs:
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
-      - name: Verify production end to end and resolve canonical URL
+      - name: Verify production end to end on public production URL
         id: verify
         shell: bash
         run: |
           set -euo pipefail
-          deployment_url="${{ steps.deploy.outputs.url }}"
+          canonical_url="$VERCEL_PRODUCTION_URL"
 
-          canonical_health_url="$(curl --fail --silent --show-error --location             --retry 8 --retry-delay 3             --output /tmp/health.json             --write-out '%{url_effective}'             "$deployment_url/api/health")"
+          http_code="$(curl --silent --show-error --location             --retry 8 --retry-delay 3             --output /tmp/health.json             --write-out '%{http_code}'             "$canonical_url/api/health")"
 
-          jq -e '
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Health endpoint returned HTTP $http_code"
+            echo "Response body:"
+            head -c 2000 /tmp/health.json || true
+            exit 1
+          fi
+
+          if ! jq -e '
             .ok == true and
             .version == "0.2.0" and
             .database == "connected" and
             .telemetry == "connected"
-          ' /tmp/health.json
+          ' /tmp/health.json; then
+            echo "::error::Health payload did not satisfy production invariants"
+            echo "Response body:"
+            cat /tmp/health.json
+            exit 1
+          fi
 
-          canonical_url="${canonical_health_url%/api/health}"
-          test -n "$canonical_url"
           curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$canonical_url/" >/dev/null
 
           echo "url=$canonical_url" >> "$GITHUB_OUTPUT"
