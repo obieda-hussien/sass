@@ -110,6 +110,13 @@ jobs:
           fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
+      - name: Inspect live Vercel service routes
+        if: always()
+        shell: bash
+        run: |
+          echo "=== production routes ==="
+          vercel routes list --production --expand --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN" || true
+
       - name: Verify production end to end on public production URL
         id: verify
         shell: bash
