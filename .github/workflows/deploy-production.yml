@@ -136,7 +136,7 @@ jobs:
 
           if ! jq -e '
             .ok == true and
-            .version == "0.2.0" and
+            .version == "0.4.0" and
             .database == "connected" and
             .telemetry == "connected"
           ' /tmp/health.json; then
@@ -167,21 +167,33 @@ jobs:
           FULFILLOS_API_BASE_URL: ${{ steps.verify.outputs.url }}/api
         run: gradle --no-daemon :app:assembleDebug :app:assembleRelease
 
-      - name: Prepare production APK artifacts
+      - name: Resolve Android version
+        id: android_version
         shell: bash
         run: |
+          set -euo pipefail
+          version="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' android/app/build.gradle.kts | head -n 1)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare production APK artifacts
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.android_version.outputs.version }}
+        run: |
+          set -euo pipefail
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FulfillOS-v0.2.1-prod-debug.apk
-          cp android/app/build/outputs/apk/release/app-release.apk dist/FulfillOS-v0.2.1-prod-release.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk "dist/FulfillOS-v${APP_VERSION}-prod-debug.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/FulfillOS-v${APP_VERSION}-prod-release.apk"
           printf '%s\n' "${{ steps.verify.outputs.url }}" > dist/production-url.txt
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v7
         with:
-          name: FulfillOS-v0.2.1-production-apks
+          name: FulfillOS-v${{ steps.android_version.outputs.version }}-production-apks
           path: |
-            dist/FulfillOS-v0.2.1-prod-debug.apk
-            dist/FulfillOS-v0.2.1-prod-release.apk
+            dist/FulfillOS-v${{ steps.android_version.outputs.version }}-prod-debug.apk
+            dist/FulfillOS-v${{ steps.android_version.outputs.version }}-prod-release.apk
             dist/production-url.txt
             dist/SHA256SUMS.txt
           if-no-files-found: error
@@ -193,5 +205,5 @@ jobs:
             echo "## FulfillOS Production"
             echo "- URL: ${{ steps.verify.outputs.url }}"
             echo "- API health: ${{ steps.verify.outputs.url }}/api/health"
-            echo "- Android artifacts: FulfillOS-v0.2.1-production-apks"
+            echo "- Android artifacts: FulfillOS-v${{ steps.android_version.outputs.version }}-production-apks"
           } >> "$GITHUB_STEP_SUMMARY"
