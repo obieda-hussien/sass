@@ -65,7 +65,7 @@ class ApiClient {
     fun acceptTask(taskId: String): Result = request("/ops/dispatch/tasks/${encode(taskId)}/claim", "{}")
     fun rejectTask(taskId: String, reason: String = "ASSOCIATE_REJECTED"): Result =
         request(
-            "/tasks/${encode(taskId)}/reject",
+            "/ops/dispatch/tasks/${encode(taskId)}/reject",
             JSONObject().put("reason", reason).toString(),
         )
 
