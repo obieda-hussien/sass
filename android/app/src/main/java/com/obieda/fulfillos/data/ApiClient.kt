@@ -37,6 +37,15 @@ class ApiClient {
             authorized = false,
         )
 
+    fun forgotPassword(identifier: String): Result =
+        request(
+            "/auth/forgot-password",
+            JSONObject()
+                .put("identifier", identifier.trim())
+                .toString(),
+            authorized = false,
+        )
+
     fun refresh(refreshToken: String, deviceId: String): Result =
         request(
             "/auth/refresh",
