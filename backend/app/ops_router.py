@@ -19,8 +19,27 @@ from .models_ops import (
     Shipment,
     StowTask,
     WorkerQualification,
+    WorkerDispatchProfile,
+    WarehouseEdge,
+    WarehouseNode,
 )
 from .security import authenticate_access
+from .services.ops_optimization import (
+    create_cycle_count_from_alert,
+    create_warehouse_node,
+    evaluate_guard_rules,
+    expiry_risk,
+    handover_pick_task,
+    incident_center,
+    location_capacity_snapshot,
+    optimize_task_route,
+    set_guard_rule,
+    set_location_operational_profile,
+    set_worker_dispatch_profile,
+    simulate_order_route,
+    upsert_warehouse_edge,
+    warehouse_heatmap,
+)
 from .services.ops_platform import (
     OpsError,
     broadcast_task,
@@ -185,6 +204,63 @@ class ShipmentReceiveRequest(BaseModel):
 class StowCompleteRequest(BaseModel):
     event_id: str
     destination_location_id: str
+
+
+class DispatchProfileRequest(BaseModel):
+    home_domain: str | None = None
+    allowed_domains: list[str] = Field(default_factory=list)
+
+
+class LocationOperationalProfileRequest(BaseModel):
+    node_id: str | None = None
+    capacity_units: int | None = Field(default=None, ge=0)
+    average_pick_seconds: float | None = Field(default=None, gt=0)
+    route_sequence_override: int | None = None
+
+
+class WarehouseNodeRequest(BaseModel):
+    id: str
+    site_id: str = "DEMO"
+    name: str
+    node_type: str = "PICK"
+    domain: str | None = None
+    aisle: int | None = None
+    x_m: float | None = None
+    y_m: float | None = None
+
+
+class WarehouseEdgeRequest(BaseModel):
+    site_id: str = "DEMO"
+    from_node_id: str
+    to_node_id: str
+    distance_m: float = Field(gt=0)
+    one_way: bool = False
+    congestion_factor: float = Field(default=1.0, gt=0)
+
+
+class HandoverRequest(BaseModel):
+    to_user_id: str
+    to_device_id: str | None = None
+    reason: str = "OPERATIONAL_HANDOVER"
+
+
+class SimulationLineRequest(BaseModel):
+    product_id: str
+    qty: int = Field(default=1, gt=0)
+
+
+class OrderSimulationRequest(BaseModel):
+    lines: list[SimulationLineRequest] = Field(default_factory=list)
+    start_location_id: str | None = None
+
+
+class GuardRuleRequest(BaseModel):
+    enabled: bool
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class CycleCountAssignRequest(BaseModel):
+    user_id: str
 
 
 @router.get("/ops/me/state")
@@ -402,6 +478,47 @@ def dispatch_assign(
         fail(exc)
 
 
+@router.get("/ops/dispatch/profiles/{user_id}")
+def dispatch_profile_get(
+    user_id: str,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    if db.get(User, user_id) is None:
+        raise HTTPException(404, "User not found")
+    row = db.get(WorkerDispatchProfile, user_id)
+    return {
+        "user_id": user_id,
+        "home_domain": row.home_domain if row else None,
+        "allowed_domains": [] if row is None else __import__("json").loads(row.allowed_domains_json or "[]"),
+    }
+
+
+@router.put("/ops/dispatch/profiles/{user_id}")
+def dispatch_profile_put(
+    user_id: str,
+    req: DispatchProfileRequest,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    if db.get(User, user_id) is None:
+        raise HTTPException(404, "User not found")
+    with db.begin():
+        row = set_worker_dispatch_profile(
+            db,
+            user_id=user_id,
+            home_domain=req.home_domain,
+            allowed_domains=req.allowed_domains,
+            manager_id=manager.id,
+        )
+        return {
+            "user_id": row.user_id,
+            "home_domain": row.home_domain,
+            "allowed_domains": __import__("json").loads(row.allowed_domains_json or "[]"),
+        }
+
+
 @router.post("/ops/qualifications")
 def qualification_grant(
     req: QualificationRequest,
@@ -419,6 +536,61 @@ def qualification_grant(
             }
     except OpsError as exc:
         fail(exc)
+
+
+@router.post("/ops/tasks/{task_id}/handover")
+def task_handover(
+    task_id: str,
+    req: HandoverRequest,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    try:
+        with db.begin():
+            task = db.get(PickTask, task_id)
+            if not task:
+                raise HTTPException(404, "Task not found")
+            row = handover_pick_task(
+                db,
+                task=task,
+                to_user_id=req.to_user_id,
+                manager_id=manager.id,
+                reason=req.reason,
+                to_device_id=req.to_device_id,
+            )
+            return {
+                "handover_id": row.id,
+                "task_id": row.task_id,
+                "from_user_id": row.from_user_id,
+                "to_user_id": row.to_user_id,
+                "picked_units_before_handover": row.picked_units_before_handover,
+                "created_at": row.created_at.isoformat(),
+            }
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/ops/tasks/{task_id}/optimize-route")
+def task_optimize_route(
+    task_id: str,
+    current_location_id: str | None = None,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, _ = who
+    with db.begin():
+        task = db.get(PickTask, task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        if user.role.upper() not in MANAGER_ROLES and task.assigned_user_id != user.id:
+            raise HTTPException(403, "Task ownership required")
+        return optimize_task_route(
+            db,
+            task,
+            current_location_id=current_location_id,
+            persist=True,
+        )
 
 
 @router.post("/ops/tasks/{task_id}/bags")
@@ -713,6 +885,55 @@ def performance_dashboard(
     }
 
 
+@router.get("/ops/analytics/heatmap")
+def analytics_heatmap(
+    from_at: datetime | None = Query(default=None, alias="from"),
+    to_at: datetime | None = Query(default=None, alias="to"),
+    site_id: str = "DEMO",
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    end = to_at or datetime.now(timezone.utc)
+    start = from_at or end.replace(hour=0, minute=0, second=0, microsecond=0)
+    return {
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "rows": warehouse_heatmap(db, from_at=start, to_at=end, site_id=site_id),
+    }
+
+
+@router.get("/ops/expiry-risk")
+def expiry_awareness(
+    days: int = Query(default=7, ge=0, le=365),
+    site_id: str = "DEMO",
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    return {"days": days, "lots": expiry_risk(db, days=days, site_id=site_id)}
+
+
+@router.post("/ops/simulation/order")
+def order_simulation(
+    req: OrderSimulationRequest,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    return simulate_order_route(
+        db,
+        lines=[line.model_dump() for line in req.lines],
+        start_location_id=req.start_location_id,
+    )
+
+
+@router.get("/ops/incidents")
+def incidents(
+    site_id: str = "DEMO",
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    return incident_center(db, site_id=site_id)
+
+
 @router.get("/ops/slotting/suggestions")
 def slotting(
     days: int = Query(default=30, ge=1, le=365),
@@ -794,6 +1015,195 @@ def device_telemetry(
             "last_location_id": row.last_location_id,
             "updated_at": row.updated_at.isoformat(),
         }
+
+
+@router.get("/ops/locations/{location_id}/capacity")
+def location_capacity(
+    location_id: str,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    if db.get(__import__("app.models", fromlist=["Location"]).Location, location_id) is None:
+        raise HTTPException(404, "Location not found")
+    return location_capacity_snapshot(db, location_id)
+
+
+@router.put("/ops/locations/{location_id}/operational-profile")
+def location_operational_profile_put(
+    location_id: str,
+    req: LocationOperationalProfileRequest,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    try:
+        with db.begin():
+            row = set_location_operational_profile(
+                db,
+                location_id=location_id,
+                node_id=req.node_id,
+                capacity_units=req.capacity_units,
+                average_pick_seconds=req.average_pick_seconds,
+                route_sequence_override=req.route_sequence_override,
+            )
+            return {
+                "location_id": row.location_id,
+                "node_id": row.node_id,
+                "capacity": location_capacity_snapshot(db, location_id),
+                "average_pick_seconds": row.average_pick_seconds,
+                "route_sequence_override": row.route_sequence_override,
+            }
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.post("/ops/topology/nodes")
+def topology_node_put(
+    req: WarehouseNodeRequest,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    with db.begin():
+        row = create_warehouse_node(
+            db,
+            node_id=req.id,
+            site_id=req.site_id,
+            name=req.name,
+            node_type=req.node_type,
+            domain=req.domain,
+            aisle=req.aisle,
+            x_m=req.x_m,
+            y_m=req.y_m,
+        )
+        return {
+            "id": row.id,
+            "site_id": row.site_id,
+            "name": row.name,
+            "node_type": row.node_type,
+            "domain": row.domain,
+            "aisle": row.aisle,
+            "x_m": row.x_m,
+            "y_m": row.y_m,
+        }
+
+
+@router.post("/ops/topology/edges")
+def topology_edge_put(
+    req: WarehouseEdgeRequest,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    try:
+        with db.begin():
+            row = upsert_warehouse_edge(
+                db,
+                site_id=req.site_id,
+                from_node_id=req.from_node_id,
+                to_node_id=req.to_node_id,
+                distance_m=req.distance_m,
+                one_way=req.one_way,
+                congestion_factor=req.congestion_factor,
+            )
+            return {
+                "id": row.id,
+                "from_node_id": row.from_node_id,
+                "to_node_id": row.to_node_id,
+                "distance_m": row.distance_m,
+                "one_way": row.one_way,
+                "congestion_factor": row.congestion_factor,
+            }
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.get("/ops/topology")
+def topology_get(
+    site_id: str = "DEMO",
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    nodes = db.scalars(select(WarehouseNode).where(WarehouseNode.site_id == site_id)).all()
+    edges = db.scalars(select(WarehouseEdge).where(WarehouseEdge.site_id == site_id)).all()
+    return {
+        "nodes": [
+            {
+                "id": n.id, "name": n.name, "node_type": n.node_type,
+                "domain": n.domain, "aisle": n.aisle, "x_m": n.x_m, "y_m": n.y_m,
+            }
+            for n in nodes
+        ],
+        "edges": [
+            {
+                "id": e.id, "from_node_id": e.from_node_id, "to_node_id": e.to_node_id,
+                "distance_m": e.distance_m, "one_way": e.one_way,
+                "congestion_factor": e.congestion_factor,
+            }
+            for e in edges
+        ],
+    }
+
+
+@router.put("/ops/guards/{domain}/{rule_type}")
+def guard_rule_put(
+    domain: str,
+    rule_type: str,
+    req: GuardRuleRequest,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    with db.begin():
+        row = set_guard_rule(
+            db,
+            site_id="DEMO",
+            domain=domain,
+            rule_type=rule_type,
+            enabled=req.enabled,
+            config=req.config,
+            manager_id=manager.id,
+        )
+        evaluation = evaluate_guard_rules(db, site_id="DEMO")
+        return {
+            "id": row.id,
+            "domain": row.domain,
+            "rule_type": row.rule_type,
+            "enabled": row.enabled,
+            "evaluation": evaluation,
+        }
+
+
+@router.post("/ops/guards/evaluate")
+def guard_evaluate(
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    with db.begin():
+        return {"results": evaluate_guard_rules(db, site_id="DEMO")}
+
+
+@router.post("/ops/inventory/alerts/{alert_id}/create-cycle-count")
+def alert_create_cycle_count(
+    alert_id: str,
+    req: CycleCountAssignRequest,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    try:
+        with db.begin():
+            session = create_cycle_count_from_alert(
+                db,
+                alert_id=alert_id,
+                user_id=req.user_id,
+                manager_id=manager.id,
+            )
+            return {
+                "session_id": session.id,
+                "location_id": session.location_id,
+                "user_id": session.user_id,
+                "status": session.status,
+            }
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
 
 
 @router.post("/ops/shipments")
