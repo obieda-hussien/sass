@@ -359,6 +359,23 @@ def _acquire_lease(
     return lease
 
 
+def acquire_pick_lease(
+    db: Session,
+    *,
+    user_id: str,
+    task_id: str,
+    device_id: str | None,
+    mode: str = "CLAIM",
+) -> ActivePickLease:
+    return _acquire_lease(
+        db,
+        user_id=user_id,
+        task_id=task_id,
+        device_id=device_id,
+        mode=mode,
+    )
+
+
 def claim_task(db: Session, task: PickTask, user_id: str, device_id: str) -> PickTask:
     user = db.get(User, user_id)
     if not user:
