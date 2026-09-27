@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import InventoryBalance, Location, Order, OrderLine, OrderStatus, PickTask, PickTaskItem, Product, TaskStatus
+from .ops_platform import candidate_inventory_sort_key, is_location_fulfillable, route_sort_key as ops_route_sort_key
 
 
 class AllocationError(Exception):
@@ -39,6 +40,8 @@ def allocate_order(db: Session, order: Order) -> PickTask:
             loc = db.get(Location, bal.location_id)
             if not loc or not loc.active or not loc.pickable or not loc.sellable:
                 continue
+            if not is_location_fulfillable(db, product, loc):
+                continue
             available = bal.qty_on_hand - bal.qty_reserved
             if available <= 0:
                 continue
@@ -48,7 +51,9 @@ def allocate_order(db: Session, order: Order) -> PickTask:
             if product.handling_class in {"HAZ", "HRV"} and loc.handling_class != product.handling_class:
                 continue
             candidates.append((bal, loc))
-        candidates.sort(key=lambda pair: location_sort_key(pair[1]))
+        # FEFO decides which stock to reserve; the final task sequence is then
+        # independently optimized so the picker does not bounce warm/cold/warm.
+        candidates.sort(key=lambda pair: candidate_inventory_sort_key(db, product, pair[1]))
 
         for bal, loc in candidates:
             available = bal.qty_on_hand - bal.qty_reserved
@@ -67,7 +72,7 @@ def allocate_order(db: Session, order: Order) -> PickTask:
     db.flush()
 
     sequence = 1
-    for line, bal, loc, qty in sorted(planned, key=lambda p: location_sort_key(p[2])):
+    for line, bal, loc, qty in sorted(planned, key=lambda p: ops_route_sort_key(p[2])):
         bal.qty_reserved += qty
         bal.version += 1
         line.allocated_qty += qty
