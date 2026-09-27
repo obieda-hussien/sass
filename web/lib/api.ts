@@ -40,6 +40,10 @@ export type PayrollPreview = {
   approved_adjustments_cents: number;
   estimated_total_cents: number;
   late_minutes: number;
+  early_leave_minutes?: number;
+  worked_minutes?: number;
+  calculated_attendance_deduction_cents?: number;
+  auto_apply_attendance_deductions?: boolean;
   completed_orders: number;
   performance_events: Record<string, number>;
   policy_note: string;
@@ -435,6 +439,37 @@ export async function getShipments(token: string) {
   return jsonRequest<{ shipments: Array<Record<string, any>> }>(
     "/ops/shipments",
     {},
+    token,
+  );
+}
+
+
+export async function getPayrollPolicy(token: string, userId: string) {
+  return jsonRequest<{
+    user_id: string;
+    late_deduction_cents_per_minute: number;
+    early_leave_deduction_cents_per_minute: number;
+    auto_apply_attendance_deductions: boolean;
+  }>(`/ops/payroll-policy/${encodeURIComponent(userId)}`, {}, token);
+}
+
+export async function updatePayrollPolicy(
+  token: string,
+  userId: string,
+  payload: {
+    late_deduction_cents_per_minute: number;
+    early_leave_deduction_cents_per_minute: number;
+    auto_apply_attendance_deductions: boolean;
+  },
+) {
+  return jsonRequest<{
+    user_id: string;
+    late_deduction_cents_per_minute: number;
+    early_leave_deduction_cents_per_minute: number;
+    auto_apply_attendance_deductions: boolean;
+  }>(
+    `/ops/payroll-policy/${encodeURIComponent(userId)}`,
+    { method: "PUT", body: JSON.stringify(payload) },
     token,
   );
 }
