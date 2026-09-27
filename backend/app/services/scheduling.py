@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 from ..models import Order, OrderStatus, PickTask, TaskStatus, User
 from .picking import PickError, task_snapshot
 from .ops_platform import release_pick_lease, worker_dispatch_status
+from ..models_ops import ActivePickLease
 
 OFFER_TTL_SECONDS = 30
+DIRECT_ASSIGN_TTL_SECONDS = 120
 TERMINAL_TASK_STATES = {
     TaskStatus.CANCELLED.value,
     TaskStatus.COMPLETED.value,
@@ -47,13 +49,24 @@ def active_task_for_actor(db: Session, user_id: str, device_id: str) -> PickTask
 
 
 def _expire_stale_offers(db: Session, now: datetime) -> int:
+    # Broadcast/legacy offers use the short TTL. A supervisor direct assignment
+    # gets a longer acknowledgement window, then returns to the pool safely.
     cutoff = now - timedelta(seconds=OFFER_TTL_SECONDS)
-    stale = db.scalars(
+    candidates = db.scalars(
         select(PickTask)
         .where(PickTask.status == TaskStatus.OFFERED.value, PickTask.offered_at <= cutoff)
         .with_for_update()
     ).all()
-    for task in stale:
+    expired = 0
+    for task in candidates:
+        lease = db.scalar(select(ActivePickLease).where(ActivePickLease.task_id == task.id))
+        ttl = DIRECT_ASSIGN_TTL_SECONDS if lease and lease.mode == "DIRECT_ASSIGN" else OFFER_TTL_SECONDS
+        offered_at = _utc(task.offered_at)
+        if offered_at is None or offered_at > now - timedelta(seconds=ttl):
+            continue
+
+        if task.assigned_user_id:
+            release_pick_lease(db, task, reason="ASSIGNMENT_TIMEOUT")
         task.status = TaskStatus.READY.value
         task.assigned_user_id = None
         task.assigned_device_id = None
@@ -62,8 +75,8 @@ def _expire_stale_offers(db: Session, now: datetime) -> int:
         order = db.get(Order, task.order_id)
         if order and order.status == OrderStatus.OFFERED.value:
             order.status = OrderStatus.ALLOCATED.value
-    return len(stale)
-
+        expired += 1
+    return expired
 
 def claim_next_task(db: Session, user_id: str, device_id: str) -> dict | None:
     """Atomically resume an owned task or claim the next READY task for 30 seconds."""
