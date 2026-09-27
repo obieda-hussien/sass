@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..models import InventoryBalance, Location, Order, OrderLine, OrderStatus, PickTask, PickTaskItem, Product, TaskStatus
 from .ops_platform import candidate_inventory_sort_key, is_location_fulfillable, route_sort_key as ops_route_sort_key
+from .ops_optimization import optimize_task_route
 
 
 class AllocationError(Exception):
@@ -87,5 +88,7 @@ def allocate_order(db: Session, order: Order) -> PickTask:
         ))
         sequence += 1
     order.status = OrderStatus.ALLOCATED.value
+    db.flush()
+    optimize_task_route(db, task, persist=True)
     db.flush()
     return task
