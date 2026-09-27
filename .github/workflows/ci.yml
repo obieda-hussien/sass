@@ -67,22 +67,22 @@ jobs:
       - name: Prepare named APKs
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FulfillOS-v0.2.1-debug.apk
-          cp android/app/build/outputs/apk/release/app-release.apk dist/FulfillOS-v0.2.1-release.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FulfillOS-v0.2.2-debug.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist/FulfillOS-v0.2.2-release.apk
           ls -lh dist
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: FulfillOS-v0.2.1-debug
-          path: dist/FulfillOS-v0.2.1-debug.apk
+          name: FulfillOS-v0.2.2-debug
+          path: dist/FulfillOS-v0.2.2-debug.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload release APK
         uses: actions/upload-artifact@v7
         with:
-          name: FulfillOS-v0.2.1-release
-          path: dist/FulfillOS-v0.2.1-release.apk
+          name: FulfillOS-v0.2.2-release
+          path: dist/FulfillOS-v0.2.2-release.apk
           if-no-files-found: error
           retention-days: 30
