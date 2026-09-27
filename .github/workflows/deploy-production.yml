@@ -25,6 +25,7 @@ jobs:
     env:
       VERCEL_TEAM_ID: team_84bpGy4T8R2nJ83YAw9rL2m3
       VERCEL_PROJECT: fulfillos
+      VERCEL_PRODUCTION_DOMAIN: fulfillos-nine.vercel.app
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       MONGODB_URI: ${{ secrets.MONGODB_URI }}
       BOOTSTRAP_PICKER_PASSWORD: ${{ secrets.BOOTSTRAP_PICKER_PASSWORD }}
@@ -102,20 +103,32 @@ jobs:
           set -euo pipefail
           output="$(vercel deploy --prod --non-interactive --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN")"
           printf '%s\n' "$output"
-          url="$(printf '%s\n' "$output" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -n 1)"
-          if [ -z "$url" ]; then
-            echo "::error::Could not determine production deployment URL"
+          deployment_url="$(printf '%s\n' "$output" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -n 1)"
+          if [ -z "$deployment_url" ]; then
+            echo "::error::Could not determine deployment URL"
             exit 1
           fi
-          echo "url=$url" >> "$GITHUB_OUTPUT"
+          vercel alias set "$deployment_url" "$VERCEL_PRODUCTION_DOMAIN" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+          echo "deployment_url=$deployment_url" >> "$GITHUB_OUTPUT"
+          echo "url=https://$VERCEL_PRODUCTION_DOMAIN" >> "$GITHUB_OUTPUT"
 
       - name: Verify production end to end
         shell: bash
         run: |
           set -euo pipefail
+          deployment_url="${{ steps.deploy.outputs.deployment_url }}"
           url="${{ steps.deploy.outputs.url }}"
-          curl --fail --retry 8 --retry-delay 3 "$url/api/health"
-          curl --fail --retry 5 --retry-delay 2 "$url/"
+
+          vercel curl /api/health --deployment "$deployment_url" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN" > /tmp/vercel-health.json
+          jq -e '.ok == true' /tmp/vercel-health.json
+
+          curl --fail --silent --show-error --location --retry 8 --retry-delay 3 "$url/api/health" -o /tmp/public-health.json
+          jq -e '.ok == true' /tmp/public-health.json
+          jq -e '.telemetry == "connected"' /tmp/public-health.json
+
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 2 "$url/" -o /tmp/root.html
+          grep -qi 'FulfillOS' /tmp/root.html
+          rm -f /tmp/vercel-health.json /tmp/public-health.json /tmp/root.html
 
       - uses: actions/setup-java@v5
         with:
@@ -141,7 +154,7 @@ jobs:
           printf '%s\n' "${{ steps.deploy.outputs.url }}" > dist/production-url.txt
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: FulfillOS-v0.2.0-production-apks
           path: |
