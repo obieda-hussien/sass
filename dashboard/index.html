@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FulfillOS Control Tower</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">FULFILLOS • DEMO SITE</p>
+        <h1>Control Tower</h1>
+        <p class="muted">Live operational state with recovery-aware SLA accounting.</p>
+      </div>
+      <div id="health" class="status">Connecting…</div>
+    </header>
+
+    <section id="metrics" class="metrics"></section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">ACTIVE WORK</p>
+          <h2>Pick tasks</h2>
+        </div>
+        <button id="refresh">Refresh</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Task</th><th>Status</th><th>Progress</th><th>Units</th><th>Effective SLA</th><th>Version</th><th>Recovery</th>
+            </tr>
+          </thead>
+          <tbody id="tasks"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel note">
+      <h2>Reliability contract</h2>
+      <p>The picker UI never treats a local scan as final until the server acknowledges the idempotent event. Network, device-recovery and system-wait segments are tracked separately from associate active time.</p>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
