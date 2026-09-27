@@ -11,6 +11,7 @@ from ..models import (
 )
 from .compatibility import storage_compatible
 from .inventory import InventoryError, get_balance, move_inventory
+from .ops_platform import OpsError, set_worker_state
 
 
 class OperationError(Exception):
@@ -62,6 +63,10 @@ def start_unpack(db: Session, temperature_class: str, user_id: str, device_id: s
     session = UnpackSession(temperature_class=temp, tote_location_id=tote, user_id=user_id, device_id=device_id)
     db.add(session)
     db.flush()
+    try:
+        set_worker_state(db, user_id, "UNPACKING", activity_ref=session.id, reason="UNPACK_STARTED")
+    except OpsError as exc:
+        raise OperationError(str(exc), exc.code) from exc
     audit(db, "UNPACK_STARTED", "UNPACK_SESSION", session.id, user_id=user_id, device_id=device_id, payload={"tote": tote, "temperature": temp})
     return session
 
@@ -133,6 +138,10 @@ def complete_unpack(db: Session, session: UnpackSession) -> dict:
         return unpack_summary(db, session)
     session.status = "COMPLETED"
     session.completed_at = datetime.now(timezone.utc)
+    try:
+        set_worker_state(db, session.user_id, "AVAILABLE", reason="UNPACK_COMPLETED", force=True)
+    except OpsError as exc:
+        raise OperationError(str(exc), exc.code) from exc
     audit(db, "UNPACK_COMPLETED", "UNPACK_SESSION", session.id, user_id=session.user_id, device_id=session.device_id)
     db.flush()
     return unpack_summary(db, session)
@@ -182,6 +191,10 @@ def start_cycle_count(db: Session, location_id: str, user_id: str) -> CycleCount
     session = CycleCountSession(location_id=location_id, user_id=user_id)
     db.add(session)
     db.flush()
+    try:
+        set_worker_state(db, user_id, "CYCLE_COUNT", activity_ref=session.id, reason="CYCLE_COUNT_STARTED")
+    except OpsError as exc:
+        raise OperationError(str(exc), exc.code) from exc
     audit(db, "CYCLE_COUNT_STARTED", "CYCLE_COUNT", session.id, user_id=user_id, payload={"location": location_id})
     return session
 
@@ -234,6 +247,10 @@ def apply_cycle_count(db: Session, session: CycleCountSession, reason: str, user
         changes.append({"product_id": entry.product_id, "variance": entry.variance, "movement_id": result.movement.id})
     session.status = "COMPLETED"
     session.completed_at = datetime.now(timezone.utc)
+    try:
+        set_worker_state(db, user_id, "AVAILABLE", reason="CYCLE_COUNT_COMPLETED", force=True)
+    except OpsError as exc:
+        raise OperationError(str(exc), exc.code) from exc
     audit(db, "CYCLE_COUNT_APPLIED", "CYCLE_COUNT", session.id, user_id=user_id, device_id=device_id, payload={"changes": changes})
     db.flush()
     return {"session_id": session.id, "status": session.status, "changes": changes}
