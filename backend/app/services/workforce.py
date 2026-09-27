@@ -17,10 +17,19 @@ from ..models import (
     TaskStatus,
     User,
 )
-from ..models_ops import AttendanceComputation, PayrollPolicy
+from ..models_ops import AttendanceComputation, PayrollPolicy, PromotionRecord
 from ..security import hash_password
 
-ALLOWED_ROLES = {"PICKER", "SENIOR_PICKER", "RECEIVER", "INVENTORY", "SUPERVISOR", "ADMIN"}
+ROLE_LEVELS = {
+    "PICKER": 10,
+    "SENIOR_PICKER": 20,
+    "QUALITY": 30,
+    "QUALITY_LEADER": 40,
+    "TEAM_LEADER": 50,
+    "SUPERVISOR": 60,
+    "ADMIN": 100,
+}
+ALLOWED_ROLES = set(ROLE_LEVELS) | {"RECEIVER", "INVENTORY"}
 MANAGER_ROLES = {"SUPERVISOR", "ADMIN"}
 
 
@@ -65,6 +74,7 @@ def employee_payload(db: Session, user: User, *, period: str | None = None) -> d
             "updated_at": profile.updated_at.isoformat(),
         },
         "payroll": payroll,
+        "promotion_history": promotion_history(db, user.id) if profile else [],
     }
 
 
@@ -135,6 +145,90 @@ def update_employee(db: Session, user: User, payload: Any) -> None:
         setattr(profile, field, value)
     db.flush()
 
+
+
+def promotion_history(db: Session, user_id: str) -> list[dict[str, Any]]:
+    rows = db.scalars(
+        select(PromotionRecord)
+        .where(PromotionRecord.user_id == user_id)
+        .order_by(PromotionRecord.effective_at.desc(), PromotionRecord.created_at.desc())
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "from_role": row.from_role,
+            "to_role": row.to_role,
+            "reason": row.reason,
+            "old_base_salary_cents": row.old_base_salary_cents,
+            "new_base_salary_cents": row.new_base_salary_cents,
+            "effective_at": row.effective_at.isoformat(),
+            "approved_by_user_id": row.approved_by_user_id,
+            "created_at": row.created_at.isoformat(),
+        }
+        for row in rows
+    ]
+
+
+def promote_employee(
+    db: Session,
+    *,
+    user: User,
+    to_role: str,
+    reason: str,
+    approver_id: str,
+    new_base_salary_cents: int | None = None,
+    effective_at: datetime | None = None,
+) -> PromotionRecord:
+    profile = db.get(EmployeeProfile, user.id)
+    if profile is None:
+        raise WorkforceError("Employee profile not found", "PROFILE_NOT_FOUND")
+
+    current = normalize_role(user.role)
+    target = normalize_role(to_role)
+    if current not in ROLE_LEVELS or target not in ROLE_LEVELS:
+        raise WorkforceError(
+            "Promotions use the operational rank ladder only",
+            "ROLE_NOT_PROMOTABLE",
+        )
+    if ROLE_LEVELS[target] <= ROLE_LEVELS[current]:
+        raise WorkforceError(
+            f"{target} is not above {current}",
+            "NOT_A_PROMOTION",
+        )
+    if target == "ADMIN":
+        raise WorkforceError(
+            "ADMIN is a technical governance role and cannot be assigned by promotion",
+            "ADMIN_PROMOTION_FORBIDDEN",
+        )
+    if not reason.strip():
+        raise WorkforceError("Promotion reason is required", "PROMOTION_REASON_REQUIRED")
+
+    old_salary = profile.base_salary_cents
+    new_salary = old_salary if new_base_salary_cents is None else int(new_base_salary_cents)
+    if new_salary < 0:
+        raise WorkforceError("Salary cannot be negative", "BAD_SALARY")
+    if new_salary < old_salary:
+        raise WorkforceError(
+            "A promotion cannot reduce base salary",
+            "PROMOTION_SALARY_REDUCTION",
+        )
+
+    record = PromotionRecord(
+        user_id=user.id,
+        from_role=current,
+        to_role=target,
+        reason=reason.strip(),
+        old_base_salary_cents=old_salary,
+        new_base_salary_cents=new_salary,
+        effective_at=effective_at or datetime.now(timezone.utc),
+        approved_by_user_id=approver_id,
+    )
+    db.add(record)
+    user.role = target
+    profile.job_title = target.replace("_", " ").title()
+    profile.base_salary_cents = new_salary
+    db.flush()
+    return record
 
 def record_attendance(db: Session, user_id: str, payload: Any, approver_id: str) -> AttendanceEntry:
     profile = db.get(EmployeeProfile, user_id)
