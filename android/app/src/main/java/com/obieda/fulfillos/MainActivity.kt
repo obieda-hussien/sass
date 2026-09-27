@@ -111,7 +111,11 @@ private fun FulfillApp(vm: AppViewModel) {
                 AppScreen.INVENTORY -> InventoryScreen(vm)
                 AppScreen.UNPACK,
                 AppScreen.BOH,
-                AppScreen.DAMAGE -> HomeScreen(vm)
+                AppScreen.DAMAGE,
+                AppScreen.CYCLE_COUNT,
+                AppScreen.RECOVERY,
+                AppScreen.RECEIVE,
+                AppScreen.REPLENISHMENT -> HomeScreen(vm)
             }
         }
     }
