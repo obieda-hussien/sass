@@ -51,6 +51,7 @@ jobs:
             vercel project add "$VERCEL_PROJECT" --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
           fi
           vercel link --yes --project "$VERCEL_PROJECT" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+          vercel project update "$VERCEL_PROJECT" --framework services --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
 
       - name: Ensure Neon Postgres exists
         shell: bash
