@@ -568,7 +568,7 @@ def release_pick_lease(db: Session, task: PickTask, *, reason: str = "PICK_SESSI
     lease = db.get(ActivePickLease, task.assigned_user_id)
     if lease and lease.task_id == task.id:
         db.delete(lease)
-    state = get_worker_state(db, task.assigned_user_id, create=True)
+    state = get_worker_state(db, task.assigned_user_id, create=False)
     if state and state.activity_ref == task.id and state.state in {"PICKING", "ORDER_ASSIGNED"}:
         set_worker_state(db, task.assigned_user_id, "AVAILABLE", reason=reason, force=True)
     db.flush()
