@@ -92,18 +92,12 @@ jobs:
           jq '{created, failed}' /tmp/vercel-env-result.json || true
           rm -f /tmp/fulfillos-env.json /tmp/vercel-env-result.json
 
-      - name: Pull production configuration
-        run: vercel pull --yes --environment=production --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
-
-      - name: Build Vercel production bundle
-        run: vercel build --prod --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
-
       - name: Deploy production
         id: deploy
         shell: bash
         run: |
           set -euo pipefail
-          output="$(vercel deploy --prebuilt --prod --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN")"
+          output="$(vercel deploy --prod --non-interactive --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN")"
           printf '%s\n' "$output"
           url="$(printf '%s\n' "$output" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -n 1)"
           if [ -z "$url" ]; then
