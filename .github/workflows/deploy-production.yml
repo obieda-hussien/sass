@@ -61,6 +61,11 @@ jobs:
           vercel link --non-interactive --project "$VERCEL_PROJECT" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
           vercel project update "$VERCEL_PROJECT" --framework services --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
 
+          # The PDA is a native client and cannot complete Vercel Authentication.
+          # Keep authorization in FulfillOS (device-bound bearer sessions) and expose
+          # the production edge publicly so Android can reach /api.
+          vercel project protection disable "$VERCEL_PROJECT" --sso --format json --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+
       - name: Ensure Neon Postgres exists
         shell: bash
         run: |
@@ -157,7 +162,7 @@ jobs:
           printf '%s\n' "${{ steps.verify.outputs.url }}" > dist/production-url.txt
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: FulfillOS-v0.2.0-production-apks
           path: |
