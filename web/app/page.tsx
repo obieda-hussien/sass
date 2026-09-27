@@ -79,17 +79,20 @@ export default function ControlTowerPage() {
             never silently discarded.
           </p>
         </div>
-        <div className="statusCluster">
-          <span className={error ? "statusDot danger" : "statusDot"} />
-          <div>
-            <strong>{error ? "API degraded" : "Live"}</strong>
-            <small>
-              {lastUpdated
-                ? `Updated ${lastUpdated.toLocaleTimeString()}`
-                : "Connecting…"}
-            </small>
+        <div className="headerActions">
+          <a className="navButton" href="/people">People & Payroll</a>
+          <div className="statusCluster">
+            <span className={error ? "statusDot danger" : "statusDot"} />
+            <div>
+              <strong>{error ? "API degraded" : "Live"}</strong>
+              <small>
+                {lastUpdated
+                  ? `Updated ${lastUpdated.toLocaleTimeString()}`
+                  : "Connecting…"}
+              </small>
+            </div>
+            <button onClick={() => void refresh()}>Refresh</button>
           </div>
-          <button onClick={() => void refresh()}>Refresh</button>
         </div>
       </header>
 
