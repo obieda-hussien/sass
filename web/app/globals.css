@@ -351,3 +351,276 @@ footer {
     grid-template-columns: 1fr;
   }
 }
+
+
+.headerActions,
+.peopleActions,
+.peopleTopline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.navButton,
+.peopleTopline a,
+.peopleActions button,
+.primaryButton,
+.resetRow button {
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--accent-soft);
+  color: #e4e3ff;
+  padding: 9px 12px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.peopleShell {
+  max-width: 1500px;
+}
+
+.peopleHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+.peopleTitle {
+  font-size: clamp(2rem, 4vw, 3.7rem);
+}
+
+.authPanel {
+  max-width: 560px;
+  margin: 70px auto 0;
+}
+
+.formStack,
+.employeeForm {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.employeeForm {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.employeeForm label,
+.formStack label {
+  display: grid;
+  gap: 7px;
+}
+
+.employeeForm label > span,
+.formStack label > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text);
+  padding: 11px 12px;
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: rgba(142, 141, 229, 0.72);
+  box-shadow: 0 0 0 3px rgba(142, 141, 229, 0.1);
+}
+
+select option {
+  color: #111;
+}
+
+.wideField {
+  grid-column: 1 / -1;
+}
+
+.primaryButton {
+  background: #6f63c8;
+  border-color: transparent;
+  font-weight: 750;
+}
+
+.primaryButton:disabled,
+.peopleActions button:disabled,
+.resetRow button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.noticeBox {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(109, 214, 167, 0.3);
+  background: rgba(109, 214, 167, 0.08);
+  color: #d6ffed;
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+}
+
+.workforceStats {
+  margin-bottom: 14px;
+}
+
+.workforceGrid {
+  align-items: start;
+}
+
+.resetList {
+  display: grid;
+  gap: 10px;
+}
+
+.resetRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.025);
+}
+
+.resetRow > div {
+  display: grid;
+  gap: 4px;
+}
+
+.resetRow small {
+  color: var(--muted);
+}
+
+.compactEmpty {
+  padding-top: 10px;
+}
+
+.employeesPanel {
+  margin-top: 14px;
+}
+
+.employeeCards {
+  display: grid;
+  gap: 12px;
+}
+
+.employeeCard {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.022);
+  border-radius: 15px;
+  padding: 16px;
+}
+
+.employeeIdentity {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.employeeIdentity > div {
+  display: grid;
+  gap: 3px;
+}
+
+.employeeIdentity strong {
+  font-size: 1.12rem;
+}
+
+.employeeIdentity span,
+.employeeMeta,
+.policyNote {
+  color: var(--muted);
+}
+
+.employeeStatus {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(255, 114, 114, 0.08);
+  color: #ffb2b2 !important;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.employeeStatus.active {
+  background: rgba(109, 214, 167, 0.08);
+  color: #aff0d2 !important;
+}
+
+.employeeMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 13px;
+  margin-top: 10px;
+  font-size: 0.82rem;
+}
+
+.employeeMetrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.employeeMetrics > div {
+  display: grid;
+  gap: 4px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: rgba(255,255,255,0.02);
+}
+
+.employeeMetrics small {
+  color: var(--muted);
+}
+
+.employeeMetrics strong {
+  font-size: 1rem;
+}
+
+.policyNote {
+  margin-top: 12px;
+  line-height: 1.55;
+  font-size: 0.78rem;
+}
+
+@media (max-width: 1050px) {
+  .employeeMetrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 800px) {
+  .peopleHeader,
+  .headerActions,
+  .resetRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .employeeForm,
+  .employeeMetrics {
+    grid-template-columns: 1fr;
+  }
+
+  .wideField {
+    grid-column: auto;
+  }
+
+  .navButton {
+    text-align: center;
+  }
+}
