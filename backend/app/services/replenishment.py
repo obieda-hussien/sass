@@ -256,7 +256,7 @@ def confirm_item(
     _require_owner(task, user_id)
     if task.status not in {"SOURCE_CONFIRMED", "STARTED"}:
         raise ReplenishmentError("Scan the source bin first", "SOURCE_NOT_CONFIRMED")
-    mapping = db.scalar(select(Barcode).where(Barcode.barcode == barcode.strip()))
+    mapping = db.scalar(select(Barcode).where(Barcode.code == barcode.strip()))
     if mapping is None or mapping.product_id != task.product_id:
         raise ReplenishmentError("Wrong product barcode", "PRODUCT_MISMATCH")
     _, duplicate = _event(
