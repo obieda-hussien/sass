@@ -2,13 +2,37 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "services": {
     "web": {
-      "entrypoint": "web",
-      "routePrefix": "/"
+      "root": "web/"
     },
     "api": {
-      "entrypoint": "backend/app/main.py",
-      "routePrefix": "/api",
-      "maxDuration": 60
+      "root": "backend/",
+      "entrypoint": "app.main:app",
+      "routes": [
+        {
+          "src": "/api/(.*)",
+          "transforms": [
+            {
+              "type": "request.path",
+              "op": "set",
+              "args": "/$1"
+            }
+          ]
+        }
+      ]
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": {
+        "service": "api"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "web"
+      }
+    }
+  ]
 }
