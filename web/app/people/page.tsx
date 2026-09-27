@@ -2,6 +2,9 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  addAttendance,
+  addPayAdjustment,
+  addPerformanceEvent,
   createEmployee,
   getEmployees,
   getPasswordResets,
@@ -61,6 +64,24 @@ export default function PeoplePage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [selectedId, setSelectedId] = useState("");
+  const [attendanceForm, setAttendanceForm] = useState({
+    scheduled_start_at: "",
+    clock_in_at: "",
+    clock_out_at: "",
+    overtime_minutes: "0",
+    notes: "",
+  });
+  const [performanceForm, setPerformanceForm] = useState({
+    event_type: "LATE_SLAM",
+    minutes: "0",
+    notes: "",
+  });
+  const [adjustmentForm, setAdjustmentForm] = useState({
+    kind: "MANUAL_ADJUSTMENT",
+    amount: "",
+    reason: "",
+  });
 
   useEffect(() => {
     const saved = window.localStorage.getItem("fulfillos_admin_token");
@@ -155,6 +176,84 @@ export default function PeoplePage() {
       await refresh(token);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not reset password");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selectedEmployee = useMemo(
+    () => employees.find((item) => item.user_id === selectedId) ?? null,
+    [employees, selectedId],
+  );
+
+  async function submitAttendance(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await addAttendance(token, selectedEmployee.user_id, {
+        scheduled_start_at: new Date(attendanceForm.scheduled_start_at).toISOString(),
+        clock_in_at: new Date(attendanceForm.clock_in_at).toISOString(),
+        clock_out_at: attendanceForm.clock_out_at
+          ? new Date(attendanceForm.clock_out_at).toISOString()
+          : null,
+        overtime_minutes: Number(attendanceForm.overtime_minutes || "0"),
+        status: "APPROVED",
+        notes: attendanceForm.notes || null,
+      });
+      setNotice(
+        `Attendance saved · late ${result.late_minutes}m · overtime ${result.overtime_minutes}m`,
+      );
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save attendance");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitPerformance(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await addPerformanceEvent(token, selectedEmployee.user_id, {
+        event_type: performanceForm.event_type,
+        minutes: Number(performanceForm.minutes || "0"),
+        notes: performanceForm.notes || null,
+      });
+      setNotice("Operational event recorded for supervisor review.");
+      setPerformanceForm({...performanceForm, minutes: "0", notes: ""});
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not record event");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitAdjustment(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await addPayAdjustment(token, selectedEmployee.user_id, {
+        kind: adjustmentForm.kind,
+        amount_cents: Math.round(Number(adjustmentForm.amount || "0") * 100),
+        reason: adjustmentForm.reason,
+        approved: true,
+      });
+      setNotice("Approved payroll adjustment added.");
+      setAdjustmentForm({...adjustmentForm, amount: "", reason: ""});
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not add pay adjustment");
     } finally {
       setBusy(false);
     }
@@ -341,9 +440,17 @@ export default function PeoplePage() {
                     <strong>{profile.full_name}</strong>
                     <span>{profile.job_title} · {profile.department}</span>
                   </div>
-                  <span className={item.active ? "employeeStatus active" : "employeeStatus"}>
-                    {item.active ? "Active" : "Inactive"}
-                  </span>
+                  <div className="employeeCardActions">
+                    <button
+                      className="miniAction"
+                      onClick={() => setSelectedId(item.user_id)}
+                    >
+                      Manage
+                    </button>
+                    <span className={item.active ? "employeeStatus active" : "employeeStatus"}>
+                      {item.active ? "Active" : "Inactive"}
+                    </span>
+                  </div>
                 </div>
                 <div className="employeeMeta">
                   <span>{profile.employee_code}</span>
@@ -370,6 +477,65 @@ export default function PeoplePage() {
           })}
         </div>
       </section>
+
+      {selectedEmployee?.profile && (
+        <section className="panel managerPanel">
+          <div className="panelHeading">
+            <div>
+              <p className="eyebrow">SUPERVISOR ACTIONS</p>
+              <h2>{selectedEmployee.profile.full_name}</h2>
+            </div>
+            <button className="miniAction" onClick={() => setSelectedId("")}>Close</button>
+          </div>
+
+          <div className="managerForms">
+            <form className="managerForm" onSubmit={submitAttendance}>
+              <h3>Attendance & overtime</h3>
+              <label><span>Scheduled start</span><input type="datetime-local" required value={attendanceForm.scheduled_start_at} onChange={(e) => setAttendanceForm({...attendanceForm, scheduled_start_at:e.target.value})} /></label>
+              <label><span>Clock in</span><input type="datetime-local" required value={attendanceForm.clock_in_at} onChange={(e) => setAttendanceForm({...attendanceForm, clock_in_at:e.target.value})} /></label>
+              <label><span>Clock out</span><input type="datetime-local" value={attendanceForm.clock_out_at} onChange={(e) => setAttendanceForm({...attendanceForm, clock_out_at:e.target.value})} /></label>
+              <label><span>Approved overtime minutes</span><input type="number" min="0" value={attendanceForm.overtime_minutes} onChange={(e) => setAttendanceForm({...attendanceForm, overtime_minutes:e.target.value})} /></label>
+              <label><span>Notes</span><input value={attendanceForm.notes} onChange={(e) => setAttendanceForm({...attendanceForm, notes:e.target.value})} /></label>
+              <button className="primaryButton" disabled={busy}>Save attendance</button>
+            </form>
+
+            <form className="managerForm" onSubmit={submitPerformance}>
+              <h3>Operational event</h3>
+              <label>
+                <span>Type</span>
+                <select value={performanceForm.event_type} onChange={(e) => setPerformanceForm({...performanceForm, event_type:e.target.value})}>
+                  <option value="LATE_SLAM">Late SLAM</option>
+                  <option value="LATE_DELIVERY">Late delivery</option>
+                  <option value="ORDER_EXCEPTION">Order exception</option>
+                  <option value="SYSTEM_DELAY">System delay</option>
+                  <option value="NETWORK_DELAY">Network delay</option>
+                </select>
+              </label>
+              <label><span>Minutes</span><input type="number" min="0" value={performanceForm.minutes} onChange={(e) => setPerformanceForm({...performanceForm, minutes:e.target.value})} /></label>
+              <label><span>Notes</span><input value={performanceForm.notes} onChange={(e) => setPerformanceForm({...performanceForm, notes:e.target.value})} /></label>
+              <button className="primaryButton" disabled={busy}>Record event</button>
+              <p className="policyNote">Operational events are evidence for human review; they do not automatically change pay.</p>
+            </form>
+
+            <form className="managerForm" onSubmit={submitAdjustment}>
+              <h3>Approved pay adjustment</h3>
+              <label>
+                <span>Kind</span>
+                <select value={adjustmentForm.kind} onChange={(e) => setAdjustmentForm({...adjustmentForm, kind:e.target.value})}>
+                  <option value="BONUS">Bonus</option>
+                  <option value="ALLOWANCE">Allowance</option>
+                  <option value="MANUAL_ADJUSTMENT">Manual adjustment</option>
+                  <option value="DEDUCTION">Deduction</option>
+                </select>
+              </label>
+              <label><span>Amount (EGP; negative for deduction)</span><input type="number" step="0.01" required value={adjustmentForm.amount} onChange={(e) => setAdjustmentForm({...adjustmentForm, amount:e.target.value})} /></label>
+              <label><span>Reason</span><input required value={adjustmentForm.reason} onChange={(e) => setAdjustmentForm({...adjustmentForm, reason:e.target.value})} /></label>
+              <button className="primaryButton" disabled={busy}>Approve adjustment</button>
+              <p className="policyNote">This is the only place operational issues can affect payroll, and it requires an explicit supervisor action with a reason.</p>
+            </form>
+          </div>
+        </section>
+      )}
     </main>
   );
 }
