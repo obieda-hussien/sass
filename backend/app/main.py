@@ -839,12 +839,11 @@ def admin_employee_detail(user_id: str, period: str | None = None, who=Depends(m
 
 @app.patch("/admin/employees/{user_id}")
 def admin_update_employee(user_id: str, req: EmployeeUpdateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
-    user = db.get(User, user_id)
-    if not user:
-        raise HTTPException(404, "Employee not found")
     try:
         with db.begin():
             user = db.get(User, user_id)
+            if not user:
+                raise HTTPException(404, "Employee not found")
             update_employee(db, user, req)
             return employee_payload(db, user)
     except WorkforceError as e:
@@ -854,10 +853,10 @@ def admin_update_employee(user_id: str, req: EmployeeUpdateRequest, who=Depends(
 @app.post("/admin/employees/{user_id}/attendance", status_code=201)
 def admin_add_attendance(user_id: str, req: AttendanceCreateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
     manager, _ = who
-    if not db.get(EmployeeProfile, user_id):
-        raise HTTPException(404, "Employee not found")
     try:
         with db.begin():
+            if not db.get(EmployeeProfile, user_id):
+                raise HTTPException(404, "Employee not found")
             entry = record_attendance(db, user_id, req, manager.id)
             return {
                 "id": entry.id,
@@ -871,9 +870,9 @@ def admin_add_attendance(user_id: str, req: AttendanceCreateRequest, who=Depends
 
 @app.post("/admin/employees/{user_id}/performance-events", status_code=201)
 def admin_add_performance_event(user_id: str, req: PerformanceEventCreateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
-    if not db.get(EmployeeProfile, user_id):
-        raise HTTPException(404, "Employee not found")
     with db.begin():
+        if not db.get(EmployeeProfile, user_id):
+            raise HTTPException(404, "Employee not found")
         event = record_performance(db, user_id, req)
         return {"id": event.id, "event_type": event.event_type, "occurred_at": event.occurred_at.isoformat()}
 
@@ -881,9 +880,9 @@ def admin_add_performance_event(user_id: str, req: PerformanceEventCreateRequest
 @app.post("/admin/employees/{user_id}/pay-adjustments", status_code=201)
 def admin_add_pay_adjustment(user_id: str, req: PayAdjustmentCreateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
     manager, _ = who
-    if not db.get(EmployeeProfile, user_id):
-        raise HTTPException(404, "Employee not found")
     with db.begin():
+        if not db.get(EmployeeProfile, user_id):
+            raise HTTPException(404, "Employee not found")
         item = add_pay_adjustment(db, user_id, req, manager.id)
         return {
             "id": item.id,
@@ -895,9 +894,9 @@ def admin_add_pay_adjustment(user_id: str, req: PayAdjustmentCreateRequest, who=
 
 @app.get("/admin/employees/{user_id}/payroll-preview")
 def admin_payroll_preview(user_id: str, period: str | None = None, who=Depends(manager_actor), db: Session = Depends(get_db)):
-    if not db.get(EmployeeProfile, user_id):
-        raise HTTPException(404, "Employee not found")
     try:
+        if not db.get(EmployeeProfile, user_id):
+            raise HTTPException(404, "Employee not found")
         return payroll_preview(db, user_id, period)
     except WorkforceError as e:
         raise HTTPException(400, {"code": e.code, "message": str(e)})
@@ -928,12 +927,11 @@ def admin_password_resets(who=Depends(manager_actor), db: Session = Depends(get_
 @app.post("/admin/password-resets/{reset_id}/issue-temporary-password")
 def admin_issue_temporary_password(reset_id: str, req: TemporaryPasswordRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
     manager, _ = who
-    reset = db.get(PasswordResetRequest, reset_id)
-    if not reset or reset.status != "PENDING":
-        raise HTTPException(404, "Pending reset request not found")
     try:
         with db.begin():
             reset = db.get(PasswordResetRequest, reset_id)
+            if not reset or reset.status != "PENDING":
+                raise HTTPException(404, "Pending reset request not found")
             password = issue_temporary_password(db, reset, manager.id, req.password)
             return {
                 "resolved": True,
