@@ -17,6 +17,7 @@ from ..models import (
     TaskStatus,
     User,
 )
+from ..models_ops import AttendanceComputation, PayrollPolicy
 from ..security import hash_password
 
 ALLOWED_ROLES = {"PICKER", "SENIOR_PICKER", "RECEIVER", "INVENTORY", "SUPERVISOR", "ADMIN"}
@@ -226,6 +227,27 @@ def payroll_preview(db: Session, user_id: str, period: str | None = None) -> dic
     late_minutes = sum(item.late_minutes for item in attendance)
     overtime_minutes = sum(item.overtime_minutes for item in attendance)
     overtime_cents = (overtime_minutes * profile.overtime_rate_cents_per_hour + 30) // 60
+    attendance_ids = [item.id for item in attendance]
+    computations = (
+        db.scalars(
+            select(AttendanceComputation).where(
+                AttendanceComputation.attendance_entry_id.in_(attendance_ids)
+            )
+        ).all()
+        if attendance_ids
+        else []
+    )
+    early_leave_minutes = sum(item.early_leave_minutes for item in computations)
+    worked_minutes = sum(item.worked_minutes for item in computations)
+    payroll_policy = db.get(PayrollPolicy, user_id)
+    calculated_attendance_deduction_cents = 0
+    auto_apply_attendance_deductions = False
+    if payroll_policy:
+        calculated_attendance_deduction_cents = (
+            late_minutes * payroll_policy.late_deduction_cents_per_minute
+            + early_leave_minutes * payroll_policy.early_leave_deduction_cents_per_minute
+        )
+        auto_apply_attendance_deductions = payroll_policy.auto_apply_attendance_deductions
 
     adjustments = db.scalars(
         select(PayAdjustment).where(
@@ -264,13 +286,23 @@ def payroll_preview(db: Session, user_id: str, period: str | None = None) -> dic
         "overtime_minutes": overtime_minutes,
         "overtime_pay_cents": overtime_cents,
         "approved_adjustments_cents": adjustment_cents,
-        "estimated_total_cents": profile.base_salary_cents + overtime_cents + adjustment_cents,
+        "estimated_total_cents": (
+            profile.base_salary_cents
+            + overtime_cents
+            + adjustment_cents
+            - (calculated_attendance_deduction_cents if auto_apply_attendance_deductions else 0)
+        ),
         "late_minutes": late_minutes,
+        "early_leave_minutes": early_leave_minutes,
+        "worked_minutes": worked_minutes,
+        "calculated_attendance_deduction_cents": calculated_attendance_deduction_cents,
+        "auto_apply_attendance_deductions": auto_apply_attendance_deductions,
         "completed_orders": int(completed_orders),
         "performance_events": by_type,
         "policy_note": (
-            "Operational lateness and SLAM/order metrics are tracked for review only. "
-            "They do not automatically reduce pay; only explicit approved adjustments affect payroll."
+            "Clock-in/out, lateness, early leave and overtime are calculated automatically. "
+            "Performance metrics never change pay automatically. Attendance deductions are applied only "
+            "when an explicit payroll policy enables them; otherwise they remain a review preview."
         ),
     }
 
