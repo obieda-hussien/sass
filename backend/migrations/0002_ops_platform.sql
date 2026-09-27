@@ -286,3 +286,109 @@ CREATE TABLE device_telemetry (
     last_location_id VARCHAR(120),
     updated_at TIMESTAMPTZ NOT NULL
 );
+
+
+-- v0.3 optimization / control extensions
+CREATE TABLE warehouse_nodes (
+    id VARCHAR(80) PRIMARY KEY,
+    site_id VARCHAR(32) NOT NULL DEFAULT 'DEMO',
+    name VARCHAR(120) NOT NULL,
+    node_type VARCHAR(32) NOT NULL DEFAULT 'PICK',
+    domain VARCHAR(24),
+    aisle INTEGER,
+    x_m DOUBLE PRECISION,
+    y_m DOUBLE PRECISION,
+    active BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE INDEX ix_warehouse_nodes_site_id ON warehouse_nodes(site_id);
+CREATE INDEX ix_warehouse_nodes_node_type ON warehouse_nodes(node_type);
+CREATE INDEX ix_warehouse_nodes_domain ON warehouse_nodes(domain);
+CREATE INDEX ix_warehouse_nodes_aisle ON warehouse_nodes(aisle);
+CREATE INDEX ix_warehouse_nodes_active ON warehouse_nodes(active);
+
+CREATE TABLE warehouse_edges (
+    id VARCHAR(36) PRIMARY KEY,
+    site_id VARCHAR(32) NOT NULL DEFAULT 'DEMO',
+    from_node_id VARCHAR(80) NOT NULL REFERENCES warehouse_nodes(id),
+    to_node_id VARCHAR(80) NOT NULL REFERENCES warehouse_nodes(id),
+    distance_m DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    one_way BOOLEAN NOT NULL DEFAULT FALSE,
+    congestion_factor DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT uq_warehouse_edge UNIQUE(site_id, from_node_id, to_node_id)
+);
+CREATE INDEX ix_warehouse_edges_site_id ON warehouse_edges(site_id);
+CREATE INDEX ix_warehouse_edges_from_node_id ON warehouse_edges(from_node_id);
+CREATE INDEX ix_warehouse_edges_to_node_id ON warehouse_edges(to_node_id);
+CREATE INDEX ix_warehouse_edges_active ON warehouse_edges(active);
+
+CREATE TABLE location_operational_profiles (
+    location_id VARCHAR(100) PRIMARY KEY REFERENCES locations(id),
+    node_id VARCHAR(80) REFERENCES warehouse_nodes(id),
+    capacity_units INTEGER,
+    average_pick_seconds DOUBLE PRECISION NOT NULL DEFAULT 12.0,
+    route_sequence_override INTEGER,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX ix_location_operational_profiles_node_id ON location_operational_profiles(node_id);
+
+CREATE TABLE worker_dispatch_profiles (
+    user_id VARCHAR(36) PRIMARY KEY REFERENCES users(id),
+    home_domain VARCHAR(24),
+    allowed_domains_json TEXT NOT NULL DEFAULT '[]',
+    updated_by_user_id VARCHAR(36) REFERENCES users(id),
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE task_handovers (
+    id VARCHAR(36) PRIMARY KEY,
+    task_id VARCHAR(36) NOT NULL REFERENCES pick_tasks(id),
+    from_user_id VARCHAR(36) NOT NULL REFERENCES users(id),
+    to_user_id VARCHAR(36) NOT NULL REFERENCES users(id),
+    authorized_by_user_id VARCHAR(36) NOT NULL REFERENCES users(id),
+    reason VARCHAR(200) NOT NULL,
+    picked_units_before_handover INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX ix_task_handovers_task_id ON task_handovers(task_id);
+CREATE INDEX ix_task_handovers_from_user_id ON task_handovers(from_user_id);
+CREATE INDEX ix_task_handovers_to_user_id ON task_handovers(to_user_id);
+CREATE INDEX ix_task_handovers_authorized_by_user_id ON task_handovers(authorized_by_user_id);
+CREATE INDEX ix_task_handovers_created_at ON task_handovers(created_at);
+
+CREATE TABLE operational_incidents (
+    id VARCHAR(36) PRIMARY KEY,
+    incident_type VARCHAR(48) NOT NULL,
+    severity VARCHAR(16) NOT NULL DEFAULT 'MEDIUM',
+    site_id VARCHAR(32) NOT NULL DEFAULT 'DEMO',
+    scope_type VARCHAR(24),
+    scope_value VARCHAR(120),
+    source_ref VARCHAR(120),
+    status VARCHAR(24) NOT NULL DEFAULT 'OPEN',
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_by_user_id VARCHAR(36) REFERENCES users(id),
+    resolved_by_user_id VARCHAR(36) REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL,
+    resolved_at TIMESTAMPTZ
+);
+CREATE INDEX ix_operational_incidents_incident_type ON operational_incidents(incident_type);
+CREATE INDEX ix_operational_incidents_severity ON operational_incidents(severity);
+CREATE INDEX ix_operational_incidents_site_id ON operational_incidents(site_id);
+CREATE INDEX ix_operational_incidents_source_ref ON operational_incidents(source_ref);
+CREATE INDEX ix_operational_incidents_status ON operational_incidents(status);
+CREATE INDEX ix_operational_incidents_created_at ON operational_incidents(created_at);
+
+CREATE TABLE fulfillment_guard_rules (
+    id VARCHAR(36) PRIMARY KEY,
+    site_id VARCHAR(32) NOT NULL DEFAULT 'DEMO',
+    domain VARCHAR(24) NOT NULL,
+    rule_type VARCHAR(48) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    config_json TEXT NOT NULL DEFAULT '{}',
+    updated_by_user_id VARCHAR(36) REFERENCES users(id),
+    updated_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT uq_fulfillment_guard_rule UNIQUE(site_id, domain, rule_type)
+);
+CREATE INDEX ix_fulfillment_guard_rules_site_id ON fulfillment_guard_rules(site_id);
+CREATE INDEX ix_fulfillment_guard_rules_domain ON fulfillment_guard_rules(domain);
+CREATE INDEX ix_fulfillment_guard_rules_rule_type ON fulfillment_guard_rules(rule_type);
