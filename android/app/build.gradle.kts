@@ -3,6 +3,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val apiBaseUrl = providers.gradleProperty("FULFILLOS_API_BASE_URL")
+    .orElse(providers.environmentVariable("FULFILLOS_API_BASE_URL"))
+    .orElse("http://10.0.2.2:8080")
+    .get()
+
 android {
     namespace = "com.obieda.fulfillos"
     compileSdk = 37
@@ -11,9 +16,22 @@ android {
         applicationId = "com.obieda.fulfillos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
-        buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:8080\"")
+        versionCode = 2
+        versionName = "0.2.0"
+        buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
+    }
+
+    buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+        getByName("release") {
+            isDebuggable = false
+            isMinifyEnabled = false
+            // Internal installable release. Production/Play builds must use a private release key.
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     buildFeatures {
