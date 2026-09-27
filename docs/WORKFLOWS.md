@@ -70,3 +70,31 @@ Android process/device restarts
 ```
 
 The user may still be asked to re-authenticate according to security policy, but task state cannot depend on the previous process staying alive.
+
+## v0.3 broadcast dispatch
+
+Allocated orders are offered to every eligible AVAILABLE picker. The first successful server-side atomic claim owns the order; later accepts fail without changing ownership. A picker is ineligible while another active pick lease exists or while the worker is on break, receiving, stowing, unpacking, cycle counting, doing expiry/bin work, training, or ending shift.
+
+## Fulfillment availability
+
+A hold can target SITE, DOMAIN, ZONE, AISLE, BIN or SKU. Physical stock means what is actually on hand. Fulfillable stock means available stock in enabled scopes. Blocked stock is inventory hidden by effective holds. Normal holds affect new allocation; hard-stop additionally rejects affected pick scans.
+
+## Pick exceptions
+
+- SKIP: defer the line to the end of the route; inventory does not change.
+- SHORT: picker verified expected stock is absent; the reserved phantom unit is reconciled.
+- DAMAGED: item is present but damaged; the unit moves to DMG.
+
+Repeated SHORT/DAMAGED evidence can open an inventory alert and create a replenishment candidate from alternate compatible stock. The picker does not leave the active order to replenish.
+
+## Bag / SPOO completion
+
+After PICKED, the picker scans one or more bag SPOOs, then finishes the pick session. The server stores the full SPOO for audit/search and returns the last four to the picker completion summary together with all item quantities.
+
+## Receive and stow
+
+Shipment → Dock Check-In → Open Receiving → domain validation → good/damaged/missing reconciliation → generated stow tasks → compatible destination recommendation → stow → shipment complete. Chilled/frozen shipments expose a target-stow timer. HAZ/HRV require worker qualification.
+
+## Shift and payroll time
+
+Clock-in/out produces factual late-after-grace, worked, early-leave and overtime minutes. Payroll may auto-apply configured attendance deductions only when an explicit worker policy enables them. Picking performance never directly changes role or pay.

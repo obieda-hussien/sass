@@ -677,3 +677,27 @@ That means:
 - no plaintext secrets in source control;
 - no HR/payroll access without explicit authorization;
 - no production release APK pointing at a development endpoint.
+
+---
+
+## Operations platform v0.3
+
+The v0.3 operations slice extends the reliability/workforce foundation with:
+
+- hard one-picker / one-active-order ownership enforced by a database-backed lease;
+- broadcast offers with atomic first-winner claims plus supervisor direct assignment;
+- worker operational-state gating during break, receiving, stow, unpack, cycle count, training and similar work;
+- picker domain restrictions, HAZ/HRV qualifications and proximity-aware dispatch context;
+- Order Explorer search by order/external ID, picker username, full SPOO or suffix, and date/time range;
+- multi-bag SPOO close and final picker completion summary;
+- warm → chilled → frozen routing, FEFO-aware allocation, topology-aware route optimization and congestion hooks;
+- fulfillment holds at site/domain/zone/aisle/bin/SKU scope while preserving physical stock truth;
+- separate physical, fulfillable and blocked stock;
+- skip, short and damaged-item workflows, repeated-short alerts, replenishment candidates and cycle-count escalation;
+- Receive v3 core: shipment, dock check-in, receiving, discrepancy reconciliation, cold-chain timer, stow recommendations and capacity checks;
+- shift clock-in/out calculations for late, early-leave, worked time and overtime;
+- explicit payroll attendance-deduction policy; performance metrics do not automatically change role or pay;
+- warehouse heatmap, expiry-risk reporting, route simulation, task handover, operational incidents and configurable fulfillment guards;
+- a Next.js `/operations` console and Android PDA support for broadcast offers, durable pick exceptions and multi-bag completion.
+
+The PostgreSQL schema extension lives in `backend/migrations/0002_ops_platform.sql`. Detailed workflow and implementation notes are in `BUILD_REPORT.md`, `docs/WORKFLOWS.md`, and `docs/ROADMAP.md`.

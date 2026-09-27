@@ -5,6 +5,7 @@ import os
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import models_ops as _models_ops  # register extension tables for create_all/tests
 from .location_parser import level_color, parse_location
 from .models import Barcode, Device, InventoryBalance, Location, Product, User
 from .security import hash_password

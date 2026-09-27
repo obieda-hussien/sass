@@ -40,6 +40,10 @@ export type PayrollPreview = {
   approved_adjustments_cents: number;
   estimated_total_cents: number;
   late_minutes: number;
+  early_leave_minutes?: number;
+  worked_minutes?: number;
+  calculated_attendance_deduction_cents?: number;
+  auto_apply_attendance_deductions?: boolean;
   completed_orders: number;
   performance_events: Record<string, number>;
   policy_note: string;
@@ -223,6 +227,249 @@ export async function addPayAdjustment(
   }>(
     `/admin/employees/${userId}/pay-adjustments`,
     { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+
+export type DispatchWorker = {
+  user_id: string;
+  username: string;
+  full_name: string;
+  state: string;
+  activity_ref: string | null;
+  dispatchable: boolean;
+  reasons: string[];
+  active_task_id: string | null;
+  qualifications: string[];
+  required_qualifications: string[];
+  device?: {
+    device_id: string;
+    battery_percent: number | null;
+    connectivity: string | null;
+    last_location_id: string | null;
+    updated_at: string;
+  } | null;
+};
+
+export type AvailabilityHold = {
+  id: string;
+  scope_type: string;
+  scope_value: string;
+  reason: string;
+  notes?: string | null;
+  hard_stop: boolean;
+  effective: boolean;
+  active: boolean;
+  starts_at: string;
+  expires_at?: string | null;
+};
+
+export type OrderSearchResult = {
+  order_id: string;
+  external_ref: string | null;
+  status: string;
+  task_id?: string | null;
+  picker: { user_id: string; username: string } | null;
+  created_at: string;
+  pick_started_at: string | null;
+  pick_finished_at: string | null;
+  sku_count: number;
+  requested_units: number;
+  picked_units: number;
+  shorted_units: number;
+  bag_count: number;
+  bags: Array<{
+    bag_no: number;
+    spoo_last4: string;
+    spoo_masked: string;
+    spoo_code: string;
+    closed_at: string;
+  }>;
+  items: Array<{
+    product_id: string;
+    asin: string | null;
+    title: string;
+    requested_qty: number;
+    picked_qty: number;
+    shorted_qty: number;
+  }>;
+};
+
+export type PerformanceRow = {
+  user_id: string;
+  username: string;
+  full_name: string;
+  orders: number;
+  items: number;
+  bags: number;
+  late_slam: number;
+  late_slam_rate: number;
+  avg_pick_seconds: number | null;
+};
+
+export async function getDispatchWorkers(token: string, taskId?: string) {
+  const suffix = taskId ? `?task_id=${encodeURIComponent(taskId)}` : "";
+  return jsonRequest<{ workers: DispatchWorker[] }>(
+    `/ops/dispatch/workers${suffix}`,
+    {},
+    token,
+  );
+}
+
+export async function directAssignTask(
+  token: string,
+  taskId: string,
+  userId: string,
+  reason = "MANUAL_DISPATCH",
+) {
+  return jsonRequest<{ task: Record<string, unknown> }>(
+    `/ops/dispatch/tasks/${encodeURIComponent(taskId)}/assign`,
+    {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId, reason }),
+    },
+    token,
+  );
+}
+
+export async function getAvailabilityHolds(token: string, siteId = "DEMO") {
+  return jsonRequest<{ holds: AvailabilityHold[] }>(
+    `/ops/availability/holds?site_id=${encodeURIComponent(siteId)}`,
+    {},
+    token,
+  );
+}
+
+export async function createAvailabilityHold(
+  token: string,
+  payload: {
+    site_id?: string;
+    scope_type: string;
+    scope_value: string;
+    reason: string;
+    notes?: string | null;
+    hard_stop?: boolean;
+    starts_at?: string | null;
+    expires_at?: string | null;
+  },
+) {
+  return jsonRequest<{
+    hold: AvailabilityHold;
+    impact: {
+      affected_skus: number;
+      affected_locations: number;
+      affected_available_units: number;
+      fully_unavailable_skus: number;
+      still_available_elsewhere: number;
+    };
+  }>(
+    "/ops/availability/holds",
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export async function resumeAvailabilityHold(token: string, holdId: string) {
+  return jsonRequest<{ id: string; active: boolean; ended_at: string }>(
+    `/ops/availability/holds/${encodeURIComponent(holdId)}/resume`,
+    { method: "POST", body: JSON.stringify({}) },
+    token,
+  );
+}
+
+export async function searchOperationalOrders(
+  token: string,
+  params: {
+    q?: string;
+    order_id?: string;
+    spoo?: string;
+    username?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+  },
+) {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") search.set(key, String(value));
+  });
+  return jsonRequest<{ count: number; orders: OrderSearchResult[] }>(
+    `/ops/orders/search?${search.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function getOperationalPerformance(
+  token: string,
+  from?: string,
+  to?: string,
+) {
+  const search = new URLSearchParams();
+  if (from) search.set("from", from);
+  if (to) search.set("to", to);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return jsonRequest<{
+    from: string;
+    to: string;
+    rows: PerformanceRow[];
+    policy_note: string;
+  }>(`/ops/performance${suffix}`, {}, token);
+}
+
+export async function getSlottingSuggestions(token: string, days = 30) {
+  return jsonRequest<{
+    days: number;
+    automatic_move: boolean;
+    suggestions: Array<{
+      product_id: string;
+      asin: string | null;
+      title: string;
+      picked_units: number;
+      current_locations: string[];
+      current_aisles: number[];
+      suggestion: string;
+      action_requires_manager_approval: boolean;
+    }>;
+  }>(`/ops/slotting/suggestions?days=${days}`, {}, token);
+}
+
+export async function getShipments(token: string) {
+  return jsonRequest<{ shipments: Array<Record<string, any>> }>(
+    "/ops/shipments",
+    {},
+    token,
+  );
+}
+
+
+export async function getPayrollPolicy(token: string, userId: string) {
+  return jsonRequest<{
+    user_id: string;
+    late_deduction_cents_per_minute: number;
+    early_leave_deduction_cents_per_minute: number;
+    auto_apply_attendance_deductions: boolean;
+  }>(`/ops/payroll-policy/${encodeURIComponent(userId)}`, {}, token);
+}
+
+export async function updatePayrollPolicy(
+  token: string,
+  userId: string,
+  payload: {
+    late_deduction_cents_per_minute: number;
+    early_leave_deduction_cents_per_minute: number;
+    auto_apply_attendance_deductions: boolean;
+  },
+) {
+  return jsonRequest<{
+    user_id: string;
+    late_deduction_cents_per_minute: number;
+    early_leave_deduction_cents_per_minute: number;
+    auto_apply_attendance_deductions: boolean;
+  }>(
+    `/ops/payroll-policy/${encodeURIComponent(userId)}`,
+    { method: "PUT", body: JSON.stringify(payload) },
     token,
   );
 }

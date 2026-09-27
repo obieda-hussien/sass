@@ -263,10 +263,43 @@ private fun PickScreen(vm: AppViewModel) {
         }
 
         if (task == null) {
-            Text("Waiting for Orders", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("No task is owned by this PDA right now.")
-            Button(onClick = vm::claimNext, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-                Text("Claim next task")
+            val summary = vm.completionSummary
+            if (summary != null) {
+                ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp)) {
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("ORDER COMPLETE", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            summary.externalRef ?: summary.orderId.take(12),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text("${summary.pickedUnits} picked • ${summary.shortedUnits} short • ${summary.bagCount} bag(s)")
+                        summary.items.forEach { item ->
+                            Row(Modifier.fillMaxWidth()) {
+                                Text(item.title, modifier = Modifier.weight(1f))
+                                Text(
+                                    "${item.pickedQty}/${item.requestedQty}" +
+                                        if (item.shortedQty > 0) " • short ${item.shortedQty}" else "",
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                        Text("Bags / SPOO", fontWeight = FontWeight.Bold)
+                        summary.bags.forEach { bag ->
+                            Text("Bag ${bag.bagNo} • ••••${bag.spooLast4}")
+                        }
+                        Button(onClick = vm::goHome, modifier = Modifier.fillMaxWidth()) {
+                            Text("Done")
+                        }
+                    }
+                }
+            } else {
+                Text("Waiting for Orders", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Text("No task is owned by this picker right now.")
+                Button(onClick = vm::claimNext, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                    Text("Check for orders")
+                }
             }
             return@Column
         }
@@ -355,10 +388,25 @@ private fun ActivePickPanel(task: TaskSnapshot, vm: AppViewModel) {
 
     if (task.taskStatus == "PICKED" || item == null || vm.scanPhase == PickScanPhase.DONE) {
         ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Pick complete", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("Every unit shown here is server-confirmed. Pack/Rack and Stage UI is next.")
-                Button(onClick = vm::goHome, modifier = Modifier.fillMaxWidth()) { Text("Back to tools") }
+                Text("Scan every bag SPOO now. One order may close on one or more bags.")
+                if (vm.closedBags.isEmpty()) {
+                    Text("No bags closed yet • scan the first bag barcode", fontWeight = FontWeight.SemiBold)
+                } else {
+                    vm.closedBags.forEach { bag ->
+                        Text("Bag ${bag.bagNo} • SPOO ••••${bag.spooLast4}")
+                    }
+                    Text("Scan another SPOO for another bag, or finish the order.")
+                }
+                if (vm.busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Button(
+                    onClick = vm::finishPickedOrder,
+                    enabled = vm.closedBags.isNotEmpty() && !vm.busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Finish order")
+                }
             }
         }
         return
@@ -384,8 +432,16 @@ private fun ActivePickPanel(task: TaskSnapshot, vm: AppViewModel) {
             }
             Text(prompt, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
             if (vm.scanPhase == PickScanPhase.ITEM) {
-                OutlinedButton(onClick = { vm.shortCurrent() }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Not found • Short 1")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.skipCurrent() }, modifier = Modifier.weight(1f)) {
+                        Text("Skip")
+                    }
+                    OutlinedButton(onClick = { vm.shortCurrent() }, modifier = Modifier.weight(1f)) {
+                        Text("Short")
+                    }
+                    OutlinedButton(onClick = { vm.damagedCurrent() }, modifier = Modifier.weight(1f)) {
+                        Text("Damaged")
+                    }
                 }
             }
             if (vm.scannedValue.isNotBlank()) {

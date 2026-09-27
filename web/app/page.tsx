@@ -80,6 +80,7 @@ export default function ControlTowerPage() {
           </p>
         </div>
         <div className="headerActions">
+          <a className="navButton" href="/operations">Operations</a>
           <a className="navButton" href="/people">People & Payroll</a>
           <div className="statusCluster">
             <span className={error ? "statusDot danger" : "statusDot"} />

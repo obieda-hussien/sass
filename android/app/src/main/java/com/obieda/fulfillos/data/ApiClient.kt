@@ -4,6 +4,9 @@ import com.obieda.fulfillos.BuildConfig
 import com.obieda.fulfillos.domain.InventoryLookup
 import com.obieda.fulfillos.domain.InventoryRow
 import com.obieda.fulfillos.domain.BarcodeProduct
+import com.obieda.fulfillos.domain.ClosedBagSummary
+import com.obieda.fulfillos.domain.CompletionItem
+import com.obieda.fulfillos.domain.OrderCompletionSummary
 import com.obieda.fulfillos.domain.PendingOperationEvent
 import com.obieda.fulfillos.domain.PendingPickEvent
 import com.obieda.fulfillos.domain.SessionInfo
@@ -58,10 +61,11 @@ class ApiClient {
 
     fun getActiveTask(): Result = request("/me/active-task", null, "GET")
     fun claimNextTask(): Result = request("/tasks/claim-next", "{}")
-    fun acceptTask(taskId: String): Result = request("/tasks/${encode(taskId)}/accept", "{}")
+    fun getMyOffers(): Result = request("/ops/dispatch/me/offers", null, "GET")
+    fun acceptTask(taskId: String): Result = request("/ops/dispatch/tasks/${encode(taskId)}/claim", "{}")
     fun rejectTask(taskId: String, reason: String = "ASSOCIATE_REJECTED"): Result =
         request(
-            "/tasks/${encode(taskId)}/reject",
+            "/ops/dispatch/tasks/${encode(taskId)}/reject",
             JSONObject().put("reason", reason).toString(),
         )
 
@@ -85,8 +89,39 @@ class ApiClient {
                 json.put("reason", event.reason ?: "MISSING_AT_LOCATION")
                 request("/tasks/${encode(event.taskId)}/short", json.toString())
             }
+            PendingPickEvent.Kind.SKIP -> {
+                json.put("reason", event.reason ?: "DEFERRED")
+                request("/ops/tasks/${encode(event.taskId)}/skip", json.toString())
+            }
+            PendingPickEvent.Kind.DAMAGED -> {
+                json.put("reason", event.reason ?: "DAMAGED")
+                request("/ops/tasks/${encode(event.taskId)}/damaged", json.toString())
+            }
         }
     }
+
+    fun closeBag(taskId: String, spooCode: String): Result =
+        request(
+            "/ops/tasks/${encode(taskId)}/bags",
+            JSONObject().put("spoo_code", spooCode.trim()).toString(),
+        )
+
+    fun finishPicking(taskId: String): Result =
+        request("/ops/tasks/${encode(taskId)}/finish-picking", "{}")
+
+    fun getWorkerState(): Result = request("/ops/me/state", null, "GET")
+
+    fun updateWorkerState(state: String, reason: String? = null): Result =
+        request(
+            "/ops/me/state",
+            JSONObject()
+                .put("state", state)
+                .put("reason", reason ?: JSONObject.NULL)
+                .toString(),
+        )
+
+    fun parseWorkerState(body: String): String =
+        JSONObject(body).optString("state", "AVAILABLE")
 
     fun inventoryByProduct(asin: String): Result =
         request("/inventory/product/${encode(asin)}", null, "GET")
@@ -190,6 +225,52 @@ class ApiClient {
             username = o.getString("username"),
             role = o.getString("role"),
             deviceId = o.getString("device_id"),
+        )
+    }
+
+    fun parseFirstOffer(body: String): TaskSnapshot? {
+        val root = JSONObject(body)
+        val offers = root.optJSONArray("offers") ?: return null
+        if (offers.length() == 0) return null
+        val offer = offers.getJSONObject(0)
+        return parseTask(offer.getJSONObject("task")).copy(
+            offerExpiresAt = offer.nullableString("expires_at"),
+        )
+    }
+
+    fun parseClosedBag(body: String): ClosedBagSummary {
+        val root = JSONObject(body)
+        return ClosedBagSummary(
+            bagNo = root.getInt("bag_no"),
+            spooLast4 = root.getString("spoo_last4"),
+        )
+    }
+
+    fun parseCompletionSummary(body: String): OrderCompletionSummary {
+        val root = JSONObject(body)
+        val items = root.optJSONArray("items")?.mapObjects { item ->
+            CompletionItem(
+                title = item.optString("title", "Unknown product"),
+                requestedQty = item.optInt("requested_qty", 0),
+                pickedQty = item.optInt("picked_qty", 0),
+                shortedQty = item.optInt("shorted_qty", 0),
+            )
+        }.orEmpty()
+        val bags = root.optJSONArray("bags")?.mapObjects { bag ->
+            ClosedBagSummary(
+                bagNo = bag.getInt("bag_no"),
+                spooLast4 = bag.getString("spoo_last4"),
+            )
+        }.orEmpty()
+        return OrderCompletionSummary(
+            orderId = root.getString("order_id"),
+            externalRef = root.nullableString("external_ref"),
+            pickerUsername = root.optJSONObject("picker")?.nullableString("username"),
+            items = items,
+            bagCount = root.optInt("bag_count", bags.size),
+            bags = bags,
+            pickedUnits = root.optInt("picked_units", 0),
+            shortedUnits = root.optInt("shorted_units", 0),
         )
     }
 

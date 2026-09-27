@@ -83,6 +83,78 @@ class PickRepository(
         flush(taskId, onResult)
     }
 
+    fun createSkip(
+        taskId: String,
+        taskItemId: String,
+        locationId: String,
+        productId: String,
+        reason: String = "DEFERRED",
+        onResult: (PickSyncResult) -> Unit,
+    ) = createException(
+        taskId = taskId,
+        taskItemId = taskItemId,
+        locationId = locationId,
+        productId = productId,
+        qty = 1,
+        kind = PendingPickEvent.Kind.SKIP,
+        reason = reason,
+        offlineMessage = "Offline • skip safely queued",
+        onResult = onResult,
+    )
+
+    fun createDamaged(
+        taskId: String,
+        taskItemId: String,
+        locationId: String,
+        productId: String,
+        qty: Int = 1,
+        reason: String = "DAMAGED",
+        onResult: (PickSyncResult) -> Unit,
+    ) = createException(
+        taskId = taskId,
+        taskItemId = taskItemId,
+        locationId = locationId,
+        productId = productId,
+        qty = qty,
+        kind = PendingPickEvent.Kind.DAMAGED,
+        reason = reason,
+        offlineMessage = "Offline • damaged item safely queued",
+        onResult = onResult,
+    )
+
+    private fun createException(
+        taskId: String,
+        taskItemId: String,
+        locationId: String,
+        productId: String,
+        qty: Int,
+        kind: PendingPickEvent.Kind,
+        reason: String,
+        offlineMessage: String,
+        onResult: (PickSyncResult) -> Unit,
+    ) {
+        val event = PendingPickEvent(
+            eventId = UUID.randomUUID().toString(),
+            taskId = taskId,
+            clientSeq = events.nextClientSeq(taskId),
+            taskItemId = taskItemId,
+            locationId = locationId,
+            productId = productId,
+            qty = qty,
+            barcode = null,
+            kind = kind,
+            reason = reason,
+            createdAtEpochMs = System.currentTimeMillis(),
+            state = PendingPickEvent.State.PENDING,
+        )
+        events.persistBeforeNetwork(event)
+        if (connectivity.state != ConnectivityState.ONLINE) {
+            onResult(PickSyncResult.Queued(event.eventId, offlineMessage))
+            return
+        }
+        flush(taskId, onResult)
+    }
+
     fun flush(taskId: String? = null, onResult: (PickSyncResult) -> Unit = {}) {
         if (connectivity.state != ConnectivityState.ONLINE) return
         io.execute {

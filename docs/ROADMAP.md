@@ -15,16 +15,16 @@
 - supervisor dashboard;
 - automated tests for the critical invariants.
 
-## P1 — operational depth — partially implemented
+## P1 — operational depth — substantially implemented in v0.3
 
-- full Receive v3 flow;
+- **implemented core:** Receive v3 shipment → dock/open → receive → discrepancy → stow flow;
 - **implemented backend:** Unpack sessions with ambient/chilled/frozen tote enforcement;
 - **implemented backend:** BOH move and destination compatibility validation; Bulk move UI remains;
 - **implemented backend:** damage reasons and DMG movement; richer disposition lifecycle remains;
 - **implemented backend:** cycle count and adjustment application; supervisor approval layer remains;
-- shortage/short-pick workflow;
+- **implemented:** separate skip / short / damaged workflows with repeated-short alerting and replenishment candidates;
 - **implemented backend:** pack/rack, stage, handoff and delivery completion; PDA screens remain;
-- role/skill permissions for HAZ and HRV;
+- **implemented:** HAZ and HRV worker qualifications used by receiving and dispatch;
 - barcode-ASIN management UI;
 - explicit `SPECIAL` bin policy once site semantics are known.
 
@@ -56,9 +56,10 @@
 
 ## P4 — optimization
 
+- **implemented baseline:** warm → chilled → frozen route sequencing;
 - physical site graph and measured walking costs;
 - route optimizer with cold-chain ordering constraints;
-- slotting recommendations based on velocity, cube and compatibility;
+- **implemented baseline:** demand/velocity slotting recommendations; cube/capacity scoring remains;
 - demand forecasting integrations;
 - wave/batch picking where site operations support it;
 - labor planning without attributing infrastructure downtime to associates;
@@ -72,3 +73,16 @@
 - MDM/kiosk enrollment;
 - NFC/badge sign-in;
 - rack/stage indicators where hardware supports them.
+
+## v0.3 completed cross-cutting work
+
+- one-picker/one-order hard lease;
+- broadcast first-winner dispatch and supervisor assignment;
+- operational work-state gating;
+- Order Explorer with SPOO and picker search;
+- multi-bag completion;
+- fulfillment-area pause/resume without falsifying inventory;
+- automatic shift time calculations and explicit payroll policies;
+- receiving/stow/cold-chain timers;
+- fast-mover suggestions;
+- Android PDA support for broadcast offers, skip/short/damage and bag close.
