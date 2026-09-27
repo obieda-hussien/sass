@@ -150,7 +150,7 @@ def dashboard_file():
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     with db.begin():
         user = db.scalar(select(User).where(User.username == req.username))
-        if not user or not verify_password(req.password, user.password_hash):
+        if not user or not user.active or not verify_password(req.password, user.password_hash):
             raise HTTPException(401, "Invalid credentials")
         device = db.get(Device, req.device_id)
         if device is None:
