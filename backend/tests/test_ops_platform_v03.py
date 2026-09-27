@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from app.models import Device, EmployeeProfile, InventoryBalance, Order, OrderLine, Product, User
+from app.models import EmployeeProfile, InventoryBalance, Order, OrderLine, PickTaskItem, Product, User
 from app.models_ops import InventoryAlert, ReplenishmentTask, StowTask
 from app.services.allocation import allocate_order
 from app.services.ops_platform import (
@@ -156,9 +156,7 @@ def test_repeated_shortage_creates_count_alert_and_replenishment_candidate(db):
         picker = _user(db, "picker1")
         product = _product(db, "DEMO-AMBIENT-001")
         order, task = _make_order(db, product, 1)
-        item = db.scalar(select(__import__("app.models", fromlist=["PickTaskItem"]).PickTaskItem).where(
-            __import__("app.models", fromlist=["PickTaskItem"]).PickTaskItem.task_id == task.id
-        ))
+        item = db.scalar(select(PickTaskItem).where(PickTaskItem.task_id == task.id))
 
         alt = ensure_location(db, "P-1-A105A110")
         db.add(InventoryBalance(location_id=alt.id, product_id=product.id, qty_on_hand=12, qty_reserved=0))
