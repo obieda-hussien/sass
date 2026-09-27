@@ -19,7 +19,7 @@ from ..models import (
 )
 from ..security import hash_password
 
-ALLOWED_ROLES = {"PICKER", "RECEIVER", "INVENTORY", "SUPERVISOR", "ADMIN"}
+ALLOWED_ROLES = {"PICKER", "SENIOR_PICKER", "RECEIVER", "INVENTORY", "SUPERVISOR", "ADMIN"}
 MANAGER_ROLES = {"SUPERVISOR", "ADMIN"}
 
 
