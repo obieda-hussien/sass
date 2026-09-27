@@ -32,6 +32,7 @@ from .services.ops_platform import (
     complete_stow_task,
     create_hold,
     create_shipment,
+    decline_task_offer,
     direct_assign_task,
     finalize_pick_session,
     get_worker_state,
@@ -348,6 +349,29 @@ def dispatch_claim(task_id: str, who=Depends(ops_actor), db: Session = Depends(g
                 raise HTTPException(404, "Task not found")
             claimed = claim_task(db, task, user.id, device.id)
             return {"task": task_snapshot(db, claimed)}
+    except OpsError as exc:
+        fail(exc)
+
+
+@router.post("/ops/dispatch/tasks/{task_id}/reject")
+def dispatch_reject(
+    task_id: str,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
+    try:
+        with db.begin():
+            task = db.get(PickTask, task_id)
+            if not task:
+                raise HTTPException(404, "Task not found")
+            return decline_task_offer(
+                db,
+                task,
+                user_id=user.id,
+                device_id=device.id,
+                reason="ASSOCIATE_REJECTED",
+            )
     except OpsError as exc:
         fail(exc)
 
