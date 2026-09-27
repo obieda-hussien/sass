@@ -249,7 +249,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         message = "Accepting order…"
         worker.execute {
             val response = callWithRefresh { graph.api.acceptTask(task.taskId) }
-            val updated = if (response.ok) runCatching { graph.api.parseTask(response.body) }.getOrNull() else null
+            val updated = if (response.ok) runCatching { graph.api.parseTaskEnvelope(response.body) }.getOrNull() else null
             ui {
                 busy = false
                 if (updated != null) {
