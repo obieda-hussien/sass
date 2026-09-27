@@ -58,33 +58,31 @@ jobs:
           set -euo pipefail
           resources="$(vercel integration list "$VERCEL_PROJECT" --integration neon --format=json --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN" 2>/dev/null || true)"
           if ! printf '%s' "$resources" | grep -q 'fulfillos-postgres'; then
-            vercel integration add neon               --name fulfillos-postgres               --plan free               -e production               -e preview               --yes               --scope "$VERCEL_TEAM_ID"               --token "$VERCEL_TOKEN"
+            vercel integration add neon --name fulfillos-postgres --plan free -e production -e preview --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
           fi
 
       - name: Sync FulfillOS production environment
         shell: bash
         run: |
           set -euo pipefail
-
           project_json="$(vercel project inspect "$VERCEL_PROJECT" --format=json --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN")"
           project_id="$(printf '%s' "$project_json" | jq -r '.id')"
           test -n "$project_id"
           test "$project_id" != "null"
 
-          jq -n             --arg mongo "$MONGODB_URI"             --arg picker "$BOOTSTRAP_PICKER_PASSWORD"             --arg supervisor "$BOOTSTRAP_SUPERVISOR_PASSWORD"             '[
-              {key:"MONGODB_URI", value:$mongo, type:"sensitive", target:["production","preview"]},
-              {key:"MONGODB_DATABASE", value:"fulfillos_telemetry", type:"plain", target:["production","preview"]},
-              {key:"DEMO_SEED", value:"0", type:"plain", target:["production","preview"]},
-              {key:"ACCESS_TOKEN_MINUTES", value:"30", type:"plain", target:["production","preview"]},
-              {key:"REFRESH_TOKEN_DAYS", value:"14", type:"plain", target:["production","preview"]},
-              {key:"BOOTSTRAP_PICKER_USERNAME", value:"picker", type:"plain", target:["production","preview"]},
-              {key:"BOOTSTRAP_PICKER_PASSWORD", value:$picker, type:"sensitive", target:["production","preview"]},
-              {key:"BOOTSTRAP_SUPERVISOR_USERNAME", value:"supervisor", type:"plain", target:["production","preview"]},
-              {key:"BOOTSTRAP_SUPERVISOR_PASSWORD", value:$supervisor, type:"sensitive", target:["production","preview"]}
-            ]' > /tmp/fulfillos-env.json
+          jq -n --arg mongo "$MONGODB_URI" --arg picker "$BOOTSTRAP_PICKER_PASSWORD" --arg supervisor "$BOOTSTRAP_SUPERVISOR_PASSWORD" '[
+            {key:"MONGODB_URI", value:$mongo, type:"sensitive", target:["production","preview"]},
+            {key:"MONGODB_DATABASE", value:"fulfillos_telemetry", type:"plain", target:["production","preview"]},
+            {key:"DEMO_SEED", value:"0", type:"plain", target:["production","preview"]},
+            {key:"ACCESS_TOKEN_MINUTES", value:"30", type:"plain", target:["production","preview"]},
+            {key:"REFRESH_TOKEN_DAYS", value:"14", type:"plain", target:["production","preview"]},
+            {key:"BOOTSTRAP_PICKER_USERNAME", value:"picker", type:"plain", target:["production","preview"]},
+            {key:"BOOTSTRAP_PICKER_PASSWORD", value:$picker, type:"sensitive", target:["production","preview"]},
+            {key:"BOOTSTRAP_SUPERVISOR_USERNAME", value:"supervisor", type:"plain", target:["production","preview"]},
+            {key:"BOOTSTRAP_SUPERVISOR_PASSWORD", value:$supervisor, type:"sensitive", target:["production","preview"]}
+          ]' > /tmp/fulfillos-env.json
 
-          curl --fail-with-body --silent --show-error             -X POST             -H "Authorization: Bearer $VERCEL_TOKEN"             -H "Content-Type: application/json"             --data-binary @/tmp/fulfillos-env.json             "https://api.vercel.com/v10/projects/$project_id/env?teamId=$VERCEL_TEAM_ID&upsert=true"             >/tmp/vercel-env-result.json
-
+          curl --fail-with-body --silent --show-error -X POST -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" --data-binary @/tmp/fulfillos-env.json "https://api.vercel.com/v10/projects/$project_id/env?teamId=$VERCEL_TEAM_ID&upsert=true" >/tmp/vercel-env-result.json
           jq '{created, failed}' /tmp/vercel-env-result.json || true
           rm -f /tmp/fulfillos-env.json /tmp/vercel-env-result.json
 
@@ -100,10 +98,8 @@ jobs:
         run: |
           set -euo pipefail
           output="$(vercel deploy --prebuilt --prod --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN")"
-          printf '%s
-' "$output"
-          url="$(printf '%s
-' "$output" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -n 1)"
+          printf '%s\n' "$output"
+          url="$(printf '%s\n' "$output" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -n 1)"
           if [ -z "$url" ]; then
             echo "::error::Could not determine production deployment URL"
             exit 1
