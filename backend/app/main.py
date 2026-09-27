@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
@@ -81,11 +81,20 @@ def root():
 
 @app.get("/health")
 def health():
+    database_status = "unavailable"
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        database_status = "connected"
+    except Exception:
+        database_status = "unavailable"
+
+    telemetry_status = "connected" if telemetry_ping() else "disabled_or_unavailable"
     return {
-        "ok": True,
+        "ok": database_status == "connected",
         "version": "0.2.0",
-        "database": "configured",
-        "telemetry": "connected" if telemetry_ping() else "disabled_or_unavailable",
+        "database": database_status,
+        "telemetry": telemetry_status,
         "server_time": datetime.now(timezone.utc).isoformat(),
     }
 
