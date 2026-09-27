@@ -15,6 +15,7 @@ from .models_ops import (
     FulfillmentHold,
     InventoryAlert,
     ReplenishmentTask,
+    PayrollPolicy,
     Shipment,
     StowTask,
     WorkerQualification,
@@ -146,6 +147,12 @@ class DeviceTelemetryRequest(BaseModel):
     last_location_id: str | None = None
 
 
+class PayrollPolicyRequest(BaseModel):
+    late_deduction_cents_per_minute: int = Field(default=0, ge=0)
+    early_leave_deduction_cents_per_minute: int = Field(default=0, ge=0)
+    auto_apply_attendance_deductions: bool = False
+
+
 class ShipmentLineInput(BaseModel):
     product_id: str
     expected_qty: int = Field(default=0, ge=0)
@@ -158,7 +165,7 @@ class ShipmentCreateRequest(BaseModel):
     shipment_type: str = "VENDOR"
     storage_domain: str = "AMBIENT"
     target_stow_minutes: int | None = Field(default=None, ge=5, le=1440)
-    lines: list[ShipmentLineInput] = []
+    lines: list[ShipmentLineInput] = Field(default_factory=list)
 
 
 class DockCheckInRequest(BaseModel):
@@ -694,6 +701,51 @@ def slotting(
         "suggestions": slotting_suggestions(db, days=days, limit=limit),
         "automatic_move": False,
     }
+
+
+@router.get("/ops/payroll-policy/{user_id}")
+def payroll_policy_get(
+    user_id: str,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    if db.get(User, user_id) is None:
+        raise HTTPException(404, "User not found")
+    row = db.get(PayrollPolicy, user_id)
+    return {
+        "user_id": user_id,
+        "late_deduction_cents_per_minute": row.late_deduction_cents_per_minute if row else 0,
+        "early_leave_deduction_cents_per_minute": row.early_leave_deduction_cents_per_minute if row else 0,
+        "auto_apply_attendance_deductions": row.auto_apply_attendance_deductions if row else False,
+    }
+
+
+@router.put("/ops/payroll-policy/{user_id}")
+def payroll_policy_put(
+    user_id: str,
+    req: PayrollPolicyRequest,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    with db.begin():
+        if db.get(User, user_id) is None:
+            raise HTTPException(404, "User not found")
+        row = db.get(PayrollPolicy, user_id)
+        if row is None:
+            row = PayrollPolicy(user_id=user_id)
+            db.add(row)
+        row.late_deduction_cents_per_minute = req.late_deduction_cents_per_minute
+        row.early_leave_deduction_cents_per_minute = req.early_leave_deduction_cents_per_minute
+        row.auto_apply_attendance_deductions = req.auto_apply_attendance_deductions
+        row.updated_by_user_id = manager.id
+        db.flush()
+        return {
+            "user_id": user_id,
+            "late_deduction_cents_per_minute": row.late_deduction_cents_per_minute,
+            "early_leave_deduction_cents_per_minute": row.early_leave_deduction_cents_per_minute,
+            "auto_apply_attendance_deductions": row.auto_apply_attendance_deductions,
+        }
 
 
 @router.post("/ops/devices/telemetry")
