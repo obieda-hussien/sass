@@ -16,6 +16,11 @@ from .models_ops import (
     InventoryAlert,
     ReplenishmentTask,
     PayrollPolicy,
+    AdminAuditEvent,
+    ShiftAssignment,
+    ShiftTemplate,
+    LeaveRequest,
+    OvertimeRequest,
     Shipment,
     StowTask,
     WorkerQualification,
@@ -75,11 +80,44 @@ from .services.ops_platform import (
     update_device_telemetry,
     worker_dispatch_status,
 )
+from .services.governance import (
+    GovernanceError,
+    assign_shift,
+    audit_event,
+    auto_clock_in,
+    auto_clock_out,
+    create_leave_request,
+    create_overtime_request,
+    create_shift_template,
+    effective_permissions,
+    end_break,
+    has_permission,
+    require_permission,
+    review_leave_request,
+    review_overtime_request,
+    roster,
+    set_role_permission,
+    set_user_permission,
+    start_break,
+)
+from .services.replenishment import (
+    ReplenishmentError,
+    assign as assign_replenishment,
+    cancel as cancel_replenishment,
+    claim as claim_replenishment,
+    complete as complete_replenishment,
+    confirm_item as confirm_replenishment_item,
+    generate_candidates as generate_replenishment_candidates,
+    queue as replenishment_queue_v04,
+    scan_destination as scan_replenishment_destination,
+    scan_source as scan_replenishment_source,
+    task_payload as replenishment_task_payload,
+)
 from .services.picking import task_snapshot
 from .services.workforce import MANAGER_ROLES
 
 
-router = APIRouter(tags=["operations-v0.3"])
+router = APIRouter(tags=["operations-v0.4"])
 
 
 def ops_actor(
@@ -96,10 +134,15 @@ def ops_actor(
     return user, device
 
 
-def ops_manager(who=Depends(ops_actor)) -> tuple[User, Device]:
+def ops_manager(
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+) -> tuple[User, Device]:
     user, device = who
-    if user.role.upper() not in MANAGER_ROLES:
-        raise HTTPException(403, "Supervisor or admin role required")
+    try:
+        require_permission(db, user, "operations.manage")
+    except GovernanceError as exc:
+        raise HTTPException(403, {"code": exc.code, "message": str(exc)})
     return user, device
 
 
@@ -261,6 +304,89 @@ class GuardRuleRequest(BaseModel):
 
 class CycleCountAssignRequest(BaseModel):
     user_id: str
+
+
+class ShiftTemplateCreateRequest(BaseModel):
+    site_id: str = "DEMO"
+    name: str = Field(min_length=2, max_length=100)
+    start_minute: int = Field(ge=0, le=1439)
+    end_minute: int = Field(ge=0, le=1439)
+    timezone_name: str = "Africa/Cairo"
+    break_minutes: int = Field(default=0, ge=0, le=480)
+    grace_minutes: int = Field(default=10, ge=0, le=240)
+
+
+class ShiftAssignmentRequest(BaseModel):
+    user_id: str
+    shift_template_id: str
+    shift_date: date
+    notes: str | None = None
+
+
+class BreakStartRequest(BaseModel):
+    break_type: str = "REST"
+    paid: bool = True
+
+
+class LeaveCreateRequest(BaseModel):
+    leave_type: str = "ANNUAL"
+    starts_on: date
+    ends_on: date
+    reason: str | None = None
+
+
+class LeaveReviewRequest(BaseModel):
+    approved: bool
+
+
+class OvertimeCreateRequest(BaseModel):
+    requested_minutes: int = Field(gt=0, le=1440)
+    shift_assignment_id: str | None = None
+    reason: str | None = None
+
+
+class OvertimeReviewRequest(BaseModel):
+    approved_minutes: int = Field(ge=0, le=1440)
+
+
+class PermissionGrantRequest(BaseModel):
+    permission: str = Field(min_length=2, max_length=120)
+    allowed: bool = True
+
+
+class ReplenishmentAssignRequest(BaseModel):
+    user_id: str
+    priority: int | None = Field(default=None, ge=0, le=1000)
+
+
+class ReplenishmentSourceRequest(BaseModel):
+    event_id: str
+    source_location_id: str
+
+
+class ReplenishmentItemRequest(BaseModel):
+    event_id: str
+    barcode: str
+
+
+class ReplenishmentDestinationRequest(BaseModel):
+    event_id: str
+    destination_location_id: str
+
+
+class ReplenishmentCompleteRequest(BaseModel):
+    event_id: str
+    actual_qty: int = Field(gt=0)
+
+
+class ReplenishmentCancelRequest(BaseModel):
+    reason: str = Field(min_length=2, max_length=240)
+
+
+class ReplenishmentGenerateRequest(BaseModel):
+    low_stock_threshold: int = Field(default=3, ge=0, le=100000)
+    target_qty: int = Field(default=12, ge=1, le=100000)
+    max_new_tasks: int = Field(default=100, ge=1, le=1000)
 
 
 @router.get("/ops/me/state")
@@ -1408,3 +1534,600 @@ def stow_complete(
             )
     except OpsError as exc:
         fail(exc)
+
+
+# --- v0.4 governance, rota and replenishment ---------------------------------
+
+@router.get("/ops/permissions/me")
+def permissions_me(
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, _ = who
+    return effective_permissions(db, user)
+
+
+@router.put("/ops/permissions/roles/{role}")
+def permission_role_put(
+    role: str,
+    req: PermissionGrantRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "permissions.manage")
+        with db.begin():
+            row = set_role_permission(
+                db,
+                role=role,
+                permission=req.permission,
+                allowed=req.allowed,
+                actor_user_id=actor.id,
+            )
+            return {"role": row.role, "permission": row.permission, "allowed": row.allowed}
+    except GovernanceError as exc:
+        raise HTTPException(403 if exc.code == "PERMISSION_DENIED" else 409, {"code": exc.code, "message": str(exc)})
+
+
+@router.put("/ops/permissions/users/{user_id}")
+def permission_user_put(
+    user_id: str,
+    req: PermissionGrantRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "permissions.manage")
+        with db.begin():
+            row = set_user_permission(
+                db,
+                user_id=user_id,
+                permission=req.permission,
+                allowed=req.allowed,
+                actor_user_id=actor.id,
+            )
+            return {"user_id": row.user_id, "permission": row.permission, "allowed": row.allowed}
+    except GovernanceError as exc:
+        raise HTTPException(403 if exc.code == "PERMISSION_DENIED" else 409, {"code": exc.code, "message": str(exc)})
+
+
+@router.get("/ops/audit")
+def admin_audit(
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    limit: int = Query(default=200, ge=1, le=1000),
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "audit.read")
+    except GovernanceError as exc:
+        raise HTTPException(403, {"code": exc.code, "message": str(exc)})
+    query = select(AdminAuditEvent).order_by(AdminAuditEvent.created_at.desc())
+    if entity_type:
+        query = query.where(AdminAuditEvent.entity_type == entity_type.strip().upper())
+    if entity_id:
+        query = query.where(AdminAuditEvent.entity_id == entity_id)
+    rows = db.scalars(query.limit(limit)).all()
+    return {
+        "events": [
+            {
+                "id": row.id,
+                "actor_user_id": row.actor_user_id,
+                "action": row.action,
+                "entity_type": row.entity_type,
+                "entity_id": row.entity_id,
+                "field_name": row.field_name,
+                "old_value_json": row.old_value_json,
+                "new_value_json": row.new_value_json,
+                "reason": row.reason,
+                "request_id": row.request_id,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in rows
+        ]
+    }
+
+
+@router.post("/ops/shifts/templates")
+def shift_template_create(
+    req: ShiftTemplateCreateRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "shifts.manage")
+        with db.begin():
+            row = create_shift_template(
+                db,
+                site_id=req.site_id,
+                name=req.name,
+                start_minute=req.start_minute,
+                end_minute=req.end_minute,
+                timezone_name=req.timezone_name,
+                break_minutes=req.break_minutes,
+                grace_minutes=req.grace_minutes,
+                actor_user_id=actor.id,
+            )
+            return {
+                "id": row.id,
+                "site_id": row.site_id,
+                "name": row.name,
+                "start_minute": row.start_minute,
+                "end_minute": row.end_minute,
+                "timezone_name": row.timezone_name,
+                "break_minutes": row.break_minutes,
+                "grace_minutes": row.grace_minutes,
+                "active": row.active,
+            }
+    except GovernanceError as exc:
+        raise HTTPException(403 if exc.code == "PERMISSION_DENIED" else 409, {"code": exc.code, "message": str(exc)})
+
+
+@router.get("/ops/shifts/templates")
+def shift_template_list(
+    active_only: bool = True,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    if not (has_permission(db, actor, "shifts.manage") or has_permission(db, actor, "operations.read")):
+        raise HTTPException(403, "Shift read permission required")
+    query = select(ShiftTemplate).order_by(ShiftTemplate.site_id, ShiftTemplate.start_minute)
+    if active_only:
+        query = query.where(ShiftTemplate.active == True)  # noqa: E712
+    rows = db.scalars(query).all()
+    return {
+        "templates": [
+            {
+                "id": row.id,
+                "site_id": row.site_id,
+                "name": row.name,
+                "start_minute": row.start_minute,
+                "end_minute": row.end_minute,
+                "timezone_name": row.timezone_name,
+                "break_minutes": row.break_minutes,
+                "grace_minutes": row.grace_minutes,
+                "active": row.active,
+            }
+            for row in rows
+        ]
+    }
+
+
+@router.post("/ops/shifts/assignments")
+def shift_assignment_create(
+    req: ShiftAssignmentRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "shifts.manage")
+        with db.begin():
+            row = assign_shift(
+                db,
+                user_id=req.user_id,
+                shift_template_id=req.shift_template_id,
+                shift_date=req.shift_date,
+                actor_user_id=actor.id,
+                notes=req.notes,
+            )
+            return {
+                "id": row.id,
+                "user_id": row.user_id,
+                "shift_date": row.shift_date.isoformat(),
+                "scheduled_start_at": row.scheduled_start_at.isoformat(),
+                "scheduled_end_at": row.scheduled_end_at.isoformat(),
+                "status": row.status,
+            }
+    except GovernanceError as exc:
+        raise HTTPException(403 if exc.code == "PERMISSION_DENIED" else 409, {"code": exc.code, "message": str(exc)})
+
+
+@router.get("/ops/shifts/roster")
+def shift_roster(
+    from_date: date = Query(alias="from"),
+    to_date: date = Query(alias="to"),
+    user_id: str | None = None,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    if actor.id != user_id and not (
+        has_permission(db, actor, "shifts.manage") or has_permission(db, actor, "operations.read")
+    ):
+        raise HTTPException(403, "Shift read permission required")
+    return {"assignments": roster(db, from_date=from_date, to_date=to_date, user_id=user_id)}
+
+
+@router.post("/ops/shifts/clock-in/auto")
+def shift_clock_in_auto(
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, _ = who
+    try:
+        with db.begin():
+            return auto_clock_in(db, user_id=user.id)
+    except (GovernanceError, OpsError) as exc:
+        code = exc.code if hasattr(exc, "code") else "SHIFT_ERROR"
+        raise HTTPException(409, {"code": code, "message": str(exc)})
+
+
+@router.post("/ops/shifts/clock-out/auto")
+def shift_clock_out_auto(
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, _ = who
+    try:
+        with db.begin():
+            return auto_clock_out(db, user_id=user.id)
+    except (GovernanceError, OpsError) as exc:
+        code = exc.code if hasattr(exc, "code") else "SHIFT_ERROR"
+        raise HTTPException(409, {"code": code, "message": str(exc)})
+
+
+@router.post("/ops/breaks/start")
+def break_start(
+    req: BreakStartRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, _ = who
+    try:
+        with db.begin():
+            row = start_break(db, user_id=user.id, break_type=req.break_type, paid=req.paid)
+            return {
+                "id": row.id,
+                "break_type": row.break_type,
+                "paid": row.paid,
+                "started_at": row.started_at.isoformat(),
+            }
+    except GovernanceError as exc:
+        raise HTTPException(409, {"code": exc.code, "message": str(exc)})
+
+
+@router.post("/ops/breaks/end")
+def break_end(
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, _ = who
+    try:
+        with db.begin():
+            row = end_break(db, user_id=user.id)
+            return {
+                "id": row.id,
+                "duration_minutes": row.duration_minutes,
+                "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+            }
+    except GovernanceError as exc:
+        raise HTTPException(409, {"code": exc.code, "message": str(exc)})
+
+
+@router.post("/ops/leave")
+def leave_create(
+    req: LeaveCreateRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, _ = who
+    try:
+        with db.begin():
+            row = create_leave_request(
+                db,
+                user_id=user.id,
+                leave_type=req.leave_type,
+                starts_on=req.starts_on,
+                ends_on=req.ends_on,
+                reason=req.reason,
+            )
+            return {
+                "id": row.id,
+                "status": row.status,
+                "starts_on": row.starts_on.isoformat(),
+                "ends_on": row.ends_on.isoformat(),
+            }
+    except GovernanceError as exc:
+        raise HTTPException(409, {"code": exc.code, "message": str(exc)})
+
+
+@router.post("/ops/leave/{request_id}/review")
+def leave_review(
+    request_id: str,
+    req: LeaveReviewRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "shifts.manage")
+        with db.begin():
+            row = review_leave_request(
+                db,
+                request_id=request_id,
+                approved=req.approved,
+                reviewer_id=actor.id,
+            )
+            return {"id": row.id, "status": row.status}
+    except GovernanceError as exc:
+        raise HTTPException(403 if exc.code == "PERMISSION_DENIED" else 409, {"code": exc.code, "message": str(exc)})
+
+
+@router.post("/ops/overtime")
+def overtime_create(
+    req: OvertimeCreateRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, _ = who
+    try:
+        with db.begin():
+            row = create_overtime_request(
+                db,
+                user_id=user.id,
+                requested_minutes=req.requested_minutes,
+                shift_assignment_id=req.shift_assignment_id,
+                reason=req.reason,
+            )
+            return {"id": row.id, "status": row.status, "requested_minutes": row.requested_minutes}
+    except GovernanceError as exc:
+        raise HTTPException(409, {"code": exc.code, "message": str(exc)})
+
+
+@router.post("/ops/overtime/{request_id}/review")
+def overtime_review(
+    request_id: str,
+    req: OvertimeReviewRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "shifts.manage")
+        with db.begin():
+            row = review_overtime_request(
+                db,
+                request_id=request_id,
+                approved_minutes=req.approved_minutes,
+                reviewer_id=actor.id,
+            )
+            return {
+                "id": row.id,
+                "status": row.status,
+                "approved_minutes": row.approved_minutes,
+            }
+    except GovernanceError as exc:
+        raise HTTPException(403 if exc.code == "PERMISSION_DENIED" else 409, {"code": exc.code, "message": str(exc)})
+
+
+@router.get("/ops/replenishment/queue")
+def replenishment_queue_live(
+    status: str | None = None,
+    mine: bool = False,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, _ = who
+    can_manage = has_permission(db, user, "replenishment.manage")
+    can_execute = has_permission(db, user, "replenishment.execute")
+    if not (can_manage or can_execute):
+        raise HTTPException(403, "Replenishment permission required")
+    return {
+        "tasks": replenishment_queue_v04(
+            db,
+            status=status,
+            assigned_user_id=user.id if mine and not can_manage else None,
+        )
+    }
+
+
+@router.post("/ops/replenishment/generate")
+def replenishment_generate(
+    req: ReplenishmentGenerateRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "replenishment.manage")
+        with db.begin():
+            rows = generate_replenishment_candidates(
+                db,
+                low_stock_threshold=req.low_stock_threshold,
+                target_qty=req.target_qty,
+                max_new_tasks=req.max_new_tasks,
+            )
+            audit_event(
+                db,
+                actor_user_id=actor.id,
+                action="GENERATE_REPLENISHMENT",
+                entity_type="REPLENISHMENT_BATCH",
+                entity_id=datetime.now(timezone.utc).isoformat(),
+                new_value={"created_task_ids": [row.id for row in rows]},
+            )
+            return {"created": len(rows), "tasks": [replenishment_task_payload(db, row) for row in rows]}
+    except GovernanceError as exc:
+        raise HTTPException(403, {"code": exc.code, "message": str(exc)})
+
+
+@router.post("/ops/replenishment/{task_id}/assign")
+def replenishment_assign(
+    task_id: str,
+    req: ReplenishmentAssignRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "replenishment.manage")
+        with db.begin():
+            task = db.get(ReplenishmentTask, task_id)
+            if not task:
+                raise HTTPException(404, "Replenishment task not found")
+            row = assign_replenishment(
+                db,
+                task=task,
+                user_id=req.user_id,
+                manager_id=actor.id,
+                priority=req.priority,
+            )
+            return replenishment_task_payload(db, row)
+    except (GovernanceError, ReplenishmentError) as exc:
+        code = exc.code
+        raise HTTPException(403 if code == "PERMISSION_DENIED" else 409, {"code": code, "message": str(exc)})
+
+
+@router.post("/ops/replenishment/{task_id}/claim")
+def replenishment_claim(
+    task_id: str,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
+    try:
+        require_permission(db, user, "replenishment.execute")
+        with db.begin():
+            task = db.get(ReplenishmentTask, task_id)
+            if not task:
+                raise HTTPException(404, "Replenishment task not found")
+            row = claim_replenishment(db, task=task, user_id=user.id, device_id=device.id)
+            return replenishment_task_payload(db, row)
+    except (GovernanceError, ReplenishmentError) as exc:
+        code = exc.code
+        raise HTTPException(403 if code == "PERMISSION_DENIED" else 409, {"code": code, "message": str(exc)})
+
+
+@router.post("/ops/replenishment/{task_id}/source")
+def replenishment_source(
+    task_id: str,
+    req: ReplenishmentSourceRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
+    try:
+        require_permission(db, user, "replenishment.execute")
+        with db.begin():
+            task = db.get(ReplenishmentTask, task_id)
+            if not task:
+                raise HTTPException(404, "Replenishment task not found")
+            return scan_replenishment_source(
+                db,
+                task=task,
+                event_id=req.event_id,
+                user_id=user.id,
+                device_id=device.id,
+                source_location_id=req.source_location_id,
+            )
+    except (GovernanceError, ReplenishmentError) as exc:
+        code = exc.code
+        raise HTTPException(403 if code == "PERMISSION_DENIED" else 409, {"code": code, "message": str(exc)})
+
+
+@router.post("/ops/replenishment/{task_id}/item")
+def replenishment_item(
+    task_id: str,
+    req: ReplenishmentItemRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
+    try:
+        require_permission(db, user, "replenishment.execute")
+        with db.begin():
+            task = db.get(ReplenishmentTask, task_id)
+            if not task:
+                raise HTTPException(404, "Replenishment task not found")
+            return confirm_replenishment_item(
+                db,
+                task=task,
+                event_id=req.event_id,
+                user_id=user.id,
+                device_id=device.id,
+                barcode=req.barcode,
+            )
+    except (GovernanceError, ReplenishmentError) as exc:
+        code = exc.code
+        raise HTTPException(403 if code == "PERMISSION_DENIED" else 409, {"code": code, "message": str(exc)})
+
+
+@router.post("/ops/replenishment/{task_id}/destination")
+def replenishment_destination(
+    task_id: str,
+    req: ReplenishmentDestinationRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
+    try:
+        require_permission(db, user, "replenishment.execute")
+        with db.begin():
+            task = db.get(ReplenishmentTask, task_id)
+            if not task:
+                raise HTTPException(404, "Replenishment task not found")
+            return scan_replenishment_destination(
+                db,
+                task=task,
+                event_id=req.event_id,
+                user_id=user.id,
+                device_id=device.id,
+                destination_location_id=req.destination_location_id,
+            )
+    except (GovernanceError, ReplenishmentError) as exc:
+        code = exc.code
+        raise HTTPException(403 if code == "PERMISSION_DENIED" else 409, {"code": code, "message": str(exc)})
+
+
+@router.post("/ops/replenishment/{task_id}/complete")
+def replenishment_complete(
+    task_id: str,
+    req: ReplenishmentCompleteRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
+    try:
+        require_permission(db, user, "replenishment.execute")
+        with db.begin():
+            task = db.get(ReplenishmentTask, task_id)
+            if not task:
+                raise HTTPException(404, "Replenishment task not found")
+            return complete_replenishment(
+                db,
+                task=task,
+                event_id=req.event_id,
+                user_id=user.id,
+                device_id=device.id,
+                actual_qty=req.actual_qty,
+            )
+    except (GovernanceError, ReplenishmentError) as exc:
+        code = exc.code
+        raise HTTPException(403 if code == "PERMISSION_DENIED" else 409, {"code": code, "message": str(exc)})
+
+
+@router.post("/ops/replenishment/{task_id}/cancel")
+def replenishment_cancel(
+    task_id: str,
+    req: ReplenishmentCancelRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    actor, _ = who
+    try:
+        require_permission(db, actor, "replenishment.manage")
+        with db.begin():
+            task = db.get(ReplenishmentTask, task_id)
+            if not task:
+                raise HTTPException(404, "Replenishment task not found")
+            row = cancel_replenishment(db, task=task, manager_id=actor.id, reason=req.reason)
+            return replenishment_task_payload(db, row)
+    except (GovernanceError, ReplenishmentError) as exc:
+        code = exc.code
+        raise HTTPException(403 if code == "PERMISSION_DENIED" else 409, {"code": code, "message": str(exc)})
