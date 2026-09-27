@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
+from .schema_migrations import migrate_schema
 from . import models_ops as _models_ops  # register v0.3 tables before create_all
 from .location_parser import parse_location
 from .models import (
@@ -51,7 +52,7 @@ from .ops_router import router as ops_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(engine)
+    migrate_schema()
     from .database import SessionLocal
 
     db = SessionLocal()
