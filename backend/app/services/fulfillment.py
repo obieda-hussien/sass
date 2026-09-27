@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from ..models import InventoryBalance, Location, Order, OrderStatus, PickTask, TaskStatus
 from .inventory import move_inventory
 from .operations import audit
+from .ops_platform import release_pick_lease
 from .picking import ensure_virtual_location, task_snapshot
 
 
@@ -140,6 +141,7 @@ def complete_delivery(db: Session, task: PickTask, user_id: str | None = None, d
     order.status = OrderStatus.COMPLETED.value
     task.finished_at = datetime.now(timezone.utc)
     task.server_version += 1
+    release_pick_lease(db, task, reason="ORDER_COMPLETED")
     audit(db, "ORDER_COMPLETED", "PICK_TASK", task.id, user_id=user_id, device_id=device_id)
     db.flush()
     return task_snapshot(db, task)
