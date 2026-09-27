@@ -392,6 +392,7 @@ class ShiftTemplate(Base):
     name: Mapped[str] = mapped_column(String(100))
     start_minute: Mapped[int] = mapped_column(Integer)
     end_minute: Mapped[int] = mapped_column(Integer)
+    timezone_name: Mapped[str] = mapped_column(String(80), default="Africa/Cairo")
     break_minutes: Mapped[int] = mapped_column(Integer, default=0)
     grace_minutes: Mapped[int] = mapped_column(Integer, default=10)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
