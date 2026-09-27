@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -276,4 +276,98 @@ class DeviceTelemetry(Base):
     battery_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     connectivity: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
     last_location_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class WarehouseNode(Base):
+    __tablename__ = "warehouse_nodes"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    site_id: Mapped[str] = mapped_column(String(32), default="DEMO", index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    node_type: Mapped[str] = mapped_column(String(32), default="PICK", index=True)
+    domain: Mapped[Optional[str]] = mapped_column(String(24), nullable=True, index=True)
+    aisle: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    x_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    y_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class WarehouseEdge(Base):
+    __tablename__ = "warehouse_edges"
+    __table_args__ = (UniqueConstraint("site_id", "from_node_id", "to_node_id", name="uq_warehouse_edge"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    site_id: Mapped[str] = mapped_column(String(32), default="DEMO", index=True)
+    from_node_id: Mapped[str] = mapped_column(ForeignKey("warehouse_nodes.id"), index=True)
+    to_node_id: Mapped[str] = mapped_column(ForeignKey("warehouse_nodes.id"), index=True)
+    distance_m: Mapped[float] = mapped_column(Float, default=1.0)
+    one_way: Mapped[bool] = mapped_column(Boolean, default=False)
+    congestion_factor: Mapped[float] = mapped_column(Float, default=1.0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class LocationOperationalProfile(Base):
+    __tablename__ = "location_operational_profiles"
+
+    location_id: Mapped[str] = mapped_column(ForeignKey("locations.id"), primary_key=True)
+    node_id: Mapped[Optional[str]] = mapped_column(ForeignKey("warehouse_nodes.id"), nullable=True, index=True)
+    capacity_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    average_pick_seconds: Mapped[float] = mapped_column(Float, default=12.0)
+    route_sequence_override: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class WorkerDispatchProfile(Base):
+    __tablename__ = "worker_dispatch_profiles"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    home_domain: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    allowed_domains_json: Mapped[str] = mapped_column(Text, default="[]")
+    updated_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class TaskHandover(Base):
+    __tablename__ = "task_handovers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    task_id: Mapped[str] = mapped_column(ForeignKey("pick_tasks.id"), index=True)
+    from_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    to_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    authorized_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    reason: Mapped[str] = mapped_column(String(200))
+    picked_units_before_handover: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class OperationalIncident(Base):
+    __tablename__ = "operational_incidents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    incident_type: Mapped[str] = mapped_column(String(48), index=True)
+    severity: Mapped[str] = mapped_column(String(16), default="MEDIUM", index=True)
+    site_id: Mapped[str] = mapped_column(String(32), default="DEMO", index=True)
+    scope_type: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    scope_value: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    source_ref: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="OPEN", index=True)
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    resolved_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FulfillmentGuardRule(Base):
+    __tablename__ = "fulfillment_guard_rules"
+    __table_args__ = (UniqueConstraint("site_id", "domain", "rule_type", name="uq_fulfillment_guard_rule"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    site_id: Mapped[str] = mapped_column(String(32), default="DEMO", index=True)
+    domain: Mapped[str] = mapped_column(String(24), index=True)
+    rule_type: Mapped[str] = mapped_column(String(48), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
