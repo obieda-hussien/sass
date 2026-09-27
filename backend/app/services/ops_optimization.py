@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     CycleCountSession,
+    Device,
     InventoryBalance,
     Location,
     OrderLine,
@@ -32,6 +33,7 @@ from ..models_ops import (
     LocationOperationalProfile,
     OperationalIncident,
     ShiftSession,
+    Shipment,
     StowTask,
     TaskHandover,
     WarehouseEdge,
@@ -237,29 +239,21 @@ def upsert_warehouse_edge(
 
 
 def _live_aisle_load(db: Session, site_id: str) -> dict[int, int]:
-    rows = db.execute(
-        select(DeviceTelemetry.last_location_id, WorkerRuntimeState.state)
-        .join(User, User.id == WorkerRuntimeState.user_id)
-        .join(
-            DeviceTelemetry,
-            DeviceTelemetry.device_id.in_(
-                select(__import__("app.models", fromlist=["Device"]).Device.id).where(
-                    __import__("app.models", fromlist=["Device"]).Device.last_user_id == User.id
-                )
-            ),
-            isouter=True,
-        )
-        .where(WorkerRuntimeState.state.not_in(["OFFLINE", "BREAK"]))
-    ).all()
     loads: dict[int, int] = defaultdict(int)
-    for location_id, _ in rows:
-        if not location_id:
+    telemetry_rows = db.scalars(
+        select(DeviceTelemetry).where(DeviceTelemetry.last_location_id.is_not(None))
+    ).all()
+    for telemetry in telemetry_rows:
+        device = db.get(Device, telemetry.device_id)
+        if device is None or not device.last_user_id:
             continue
-        location = db.get(Location, location_id)
+        state = db.get(WorkerRuntimeState, device.last_user_id)
+        if state is None or state.state in {"OFFLINE", "BREAK"}:
+            continue
+        location = db.get(Location, telemetry.last_location_id)
         if location and location.site_id == site_id and location.aisle is not None:
             loads[location.aisle] += 1
     return dict(loads)
-
 
 def _node_for_location(db: Session, location_id: str) -> WarehouseNode | None:
     profile = db.get(LocationOperationalProfile, location_id)
@@ -459,8 +453,6 @@ def distance_to_task_first_item(db: Session, task: PickTask, user_id: str) -> fl
     )
     if first is None:
         return 0.0
-    from ..models import Device
-
     device = db.scalar(
         select(Device).where(Device.last_user_id == user_id).order_by(Device.last_seen_at.desc()).limit(1)
     )
@@ -515,7 +507,6 @@ def warehouse_heatmap(
         elif event.event_type == "SKIP":
             row["skip_events"] += 1
 
-    from ..models import Device
     telemetry_rows = db.execute(
         select(DeviceTelemetry, Device)
         .join(Device, Device.id == DeviceTelemetry.device_id)
@@ -741,9 +732,9 @@ def incident_center(db: Session, *, site_id: str = "DEMO") -> dict[str, Any]:
     ).all()
     overdue_stow = []
     shipments = db.scalars(
-        select(__import__("app.models_ops", fromlist=["Shipment"]).Shipment).where(
-            __import__("app.models_ops", fromlist=["Shipment"]).Shipment.status.not_in(["COMPLETED", "CANCELLED"]),
-            __import__("app.models_ops", fromlist=["Shipment"]).Shipment.opened_at.is_not(None),
+        select(Shipment).where(
+            Shipment.status.not_in(["COMPLETED", "CANCELLED"]),
+            Shipment.opened_at.is_not(None),
         )
     ).all()
     now = now_utc()
