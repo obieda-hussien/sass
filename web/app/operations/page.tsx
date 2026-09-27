@@ -96,8 +96,8 @@ export default function OperationsPage() {
     setError("");
     try {
       const result = await managerLogin(loginUser, loginPassword);
-      if (!["SUPERVISOR", "ADMIN"].includes(result.role.toUpperCase())) {
-        throw new Error("Supervisor or admin role required");
+      if (!["TEAM_LEADER", "SUPERVISOR", "ADMIN"].includes(result.role.toUpperCase())) {
+        throw new Error("Team leader, supervisor or admin role required");
       }
       window.localStorage.setItem("fulfillos_admin_token", result.access_token);
       setToken(result.access_token);

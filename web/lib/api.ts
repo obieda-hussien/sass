@@ -49,6 +49,18 @@ export type PayrollPreview = {
   policy_note: string;
 };
 
+export type PromotionRecord = {
+  id: string;
+  from_role: string;
+  to_role: string;
+  reason: string;
+  old_base_salary_cents: number;
+  new_base_salary_cents: number;
+  effective_at: string;
+  approved_by_user_id: string;
+  created_at: string;
+};
+
 export type Employee = {
   user_id: string;
   username: string;
@@ -72,6 +84,7 @@ export type Employee = {
     notes: string | null;
   } | null;
   payroll: PayrollPreview | null;
+  promotion_history: PromotionRecord[];
   temporary_password?: string | null;
 };
 
@@ -162,6 +175,35 @@ export async function issueTemporaryPassword(token: string, resetId: string) {
   }>(
     `/admin/password-resets/${resetId}/issue-temporary-password`,
     { method: "POST", body: JSON.stringify({}) },
+    token,
+  );
+}
+
+
+export async function promoteEmployee(
+  token: string,
+  userId: string,
+  payload: {
+    to_role: string;
+    reason: string;
+    new_base_salary_cents?: number | null;
+    effective_at?: string | null;
+  },
+) {
+  return jsonRequest<{
+    promotion_id: string;
+    user_id: string;
+    from_role: string;
+    to_role: string;
+    reason: string;
+    old_base_salary_cents: number;
+    new_base_salary_cents: number;
+    effective_at: string;
+    approved_by_user_id: string;
+    employee: Employee;
+  }>(
+    `/admin/employees/${userId}/promote`,
+    { method: "POST", body: JSON.stringify(payload) },
     token,
   );
 }

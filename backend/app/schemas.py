@@ -241,3 +241,10 @@ class PayAdjustmentCreateRequest(BaseModel):
 
 class TemporaryPasswordRequest(BaseModel):
     password: str | None = Field(default=None, min_length=10, max_length=128)
+
+
+class PromotionRequest(BaseModel):
+    to_role: str
+    reason: str = Field(min_length=2, max_length=300)
+    new_base_salary_cents: int | None = Field(default=None, ge=0)
+    effective_at: datetime | None = None

@@ -76,7 +76,7 @@ data class InventoryLookup(
 )
 
 enum class ConnectivityState { ONLINE, OFFLINE, RECONNECTING }
-enum class AppScreen { HOME, PICK, INVENTORY, UNPACK, BOH, DAMAGE }
+enum class AppScreen { HOME, PICK, INVENTORY, UNPACK, BOH, DAMAGE, CYCLE_COUNT, RECOVERY, RECEIVE, REPLENISHMENT }
 enum class PickScanPhase { BIN, ITEM, SYNCING, DONE }
 
 
@@ -119,7 +119,7 @@ data class BarcodeProduct(
     val handlingClass: String,
 )
 
-enum class OperationMode { UNPACK, BOH, DAMAGE }
+enum class OperationMode { UNPACK, BOH, DAMAGE, CYCLE_COUNT, RECOVERY, RECEIVE, REPLENISHMENT }
 enum class OperationScanPhase { SOURCE, ITEM, DESTINATION, SYNCING }
 
 
@@ -156,3 +156,81 @@ data class WorkerOperationalState(
     val activityRef: String?,
     val dispatchBlocked: Boolean,
 )
+
+
+data class RecoveryItem(
+    val productId: String,
+    val asin: String?,
+    val title: String,
+    val qty: Int,
+    val sourceLocationId: String,
+    val compatibleDestinations: List<String>,
+)
+
+data class RecoverySummary(
+    val taskId: String,
+    val orderId: String,
+    val recoveryType: String,
+    val sourceLocationId: String?,
+    val items: List<RecoveryItem>,
+)
+
+data class CycleCountEntrySummary(
+    val entryId: String,
+    val productId: String,
+    val systemQty: Int,
+    val countedQty: Int,
+    val variance: Int,
+)
+
+data class ShipmentLineSummary(
+    val id: String,
+    val productId: String,
+    val expectedQty: Int,
+    val receivedQty: Int,
+    val damagedQty: Int,
+    val missingQty: Int,
+    val recommendedStow: List<String>,
+)
+
+data class StowTaskSummary(
+    val id: String,
+    val productId: String,
+    val qty: Int,
+    val status: String,
+    val destinationLocationId: String?,
+)
+
+data class ShipmentSummary(
+    val id: String,
+    val label: String,
+    val shipmentType: String,
+    val storageDomain: String,
+    val status: String,
+    val expectedUnits: Int,
+    val receivedUnits: Int,
+    val damagedUnits: Int,
+    val missingUnits: Int,
+    val targetStowMinutes: Int,
+    val elapsedMinutes: Int?,
+    val stowOverdue: Boolean,
+    val lines: List<ShipmentLineSummary>,
+    val stowTasks: List<StowTaskSummary>,
+)
+
+data class ReplenishmentSummary(
+    val id: String,
+    val productId: String,
+    val asin: String?,
+    val title: String,
+    val sourceLocationId: String,
+    val destinationLocationId: String,
+    val qty: Int,
+    val actualQty: Int,
+    val status: String,
+    val priority: Int,
+    val sourceAvailableQty: Int,
+    val destinationOnHand: Int,
+)
+
+enum class ReplenishmentScanPhase { SOURCE, ITEM, DESTINATION, COMPLETE }

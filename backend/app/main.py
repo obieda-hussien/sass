@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
+from .schema_migrations import migrate_schema
 from . import models_ops as _models_ops  # register v0.3 tables before create_all
 from .location_parser import parse_location
 from .models import (
@@ -22,7 +23,7 @@ from .schemas import (
     BOHMoveRequest, CancelRequest, CycleCountApplyRequest, CycleCountLineRequest, CycleCountStartRequest,
     DamageRequest, DowntimeRequest, HeartbeatRequest, InventoryMoveRequest, LoginRequest, OrderCreate,
     AttendanceCreateRequest, ChangePasswordRequest, EmployeeCreateRequest, EmployeeUpdateRequest,
-    ForgotPasswordRequest, HandoffRequest, PayAdjustmentCreateRequest, PerformanceEventCreateRequest,
+    ForgotPasswordRequest, HandoffRequest, PayAdjustmentCreateRequest, PerformanceEventCreateRequest, PromotionRequest,
     PickScanRequest, ReceiveRequest, RecoveryStowRequest, RefreshRequest, RejectOfferRequest,
     ShortPickRequest, StageRequest, SyncBatchRequest, TaskOfferRequest, TemporaryPasswordRequest,
     UnpackScanRequest, UnpackStartRequest,
@@ -43,7 +44,7 @@ from .services.sla import board_target_seconds, effective_elapsed_seconds
 from .services.fulfillment import FulfillmentError, complete_delivery, handoff_task, stage_task, start_pack_rack
 from .services.workforce import (
     MANAGER_ROLES, WorkforceError, add_pay_adjustment, create_employee, employee_payload,
-    issue_temporary_password, payroll_preview, record_attendance, record_performance,
+    issue_temporary_password, payroll_preview, promote_employee, record_attendance, record_performance,
     request_password_reset, update_employee,
 )
 from .telemetry import emit as emit_telemetry, ping as telemetry_ping
@@ -51,7 +52,7 @@ from .ops_router import router as ops_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(engine)
+    migrate_schema()
     from .database import SessionLocal
 
     db = SessionLocal()
@@ -84,7 +85,7 @@ class ApiPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
-app = FastAPI(title="FulfillOS", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="FulfillOS", version="0.4.0", lifespan=lifespan)
 app.add_middleware(ApiPrefixMiddleware)
 app.include_router(ops_router)
 # Router-level fallback for hosting layers that preserve the public /api prefix
@@ -118,7 +119,7 @@ def manager_actor(who=Depends(actor)) -> tuple[User, Device]:
 
 @app.get("/")
 def root():
-    return {"name": "FulfillOS", "version": "0.3.0", "dashboard": "/dashboard"}
+    return {"name": "FulfillOS", "version": "0.4.0", "dashboard": "/dashboard"}
 
 
 @app.get("/health")
@@ -134,7 +135,7 @@ def health():
     telemetry_status = "connected" if telemetry_ping() else "disabled_or_unavailable"
     return {
         "ok": database_status == "connected",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "database": database_status,
         "telemetry": telemetry_status,
         "server_time": datetime.now(timezone.utc).isoformat(),
@@ -884,6 +885,44 @@ def admin_update_employee(user_id: str, req: EmployeeUpdateRequest, who=Depends(
                 raise HTTPException(404, "Employee not found")
             update_employee(db, user, req)
             return employee_payload(db, user)
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.post("/admin/employees/{user_id}/promote")
+def admin_promote_employee(
+    user_id: str,
+    req: PromotionRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    try:
+        with db.begin():
+            user = db.get(User, user_id)
+            if not user or not db.get(EmployeeProfile, user_id):
+                raise HTTPException(404, "Employee not found")
+            record = promote_employee(
+                db,
+                user=user,
+                to_role=req.to_role,
+                reason=req.reason,
+                approver_id=manager.id,
+                new_base_salary_cents=req.new_base_salary_cents,
+                effective_at=req.effective_at,
+            )
+            return {
+                "promotion_id": record.id,
+                "user_id": user.id,
+                "from_role": record.from_role,
+                "to_role": record.to_role,
+                "reason": record.reason,
+                "old_base_salary_cents": record.old_base_salary_cents,
+                "new_base_salary_cents": record.new_base_salary_cents,
+                "effective_at": record.effective_at.isoformat(),
+                "approved_by_user_id": record.approved_by_user_id,
+                "employee": employee_payload(db, user),
+            }
     except WorkforceError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
 

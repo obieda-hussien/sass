@@ -504,7 +504,11 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             AppScreen.HOME -> message = "Scan received • open a tool to use it"
             AppScreen.UNPACK,
             AppScreen.BOH,
-            AppScreen.DAMAGE -> message = "Scan received • operation screen is not active yet"
+            AppScreen.DAMAGE,
+            AppScreen.CYCLE_COUNT,
+            AppScreen.RECOVERY,
+            AppScreen.RECEIVE,
+            AppScreen.REPLENISHMENT -> message = "Scan received • operation screen is not active yet"
         }
     }
 

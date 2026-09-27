@@ -149,6 +149,16 @@ class ReplenishmentTask(Base):
     trigger: Mapped[str] = mapped_column(String(40), default="SHORT")
     source_ref: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     assigned_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    assigned_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, default=50, index=True)
+    actual_qty: Mapped[int] = mapped_column(Integer, default=0)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_scanned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    destination_scanned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_reason: Mapped[Optional[str]] = mapped_column(String(240), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -371,3 +381,154 @@ class FulfillmentGuardRule(Base):
     config_json: Mapped[str] = mapped_column(Text, default="{}")
     updated_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ShiftTemplate(Base):
+    __tablename__ = "shift_templates"
+    __table_args__ = (UniqueConstraint("site_id", "name", name="uq_shift_template_site_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    site_id: Mapped[str] = mapped_column(String(32), default="DEMO", index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    start_minute: Mapped[int] = mapped_column(Integer)
+    end_minute: Mapped[int] = mapped_column(Integer)
+    timezone_name: Mapped[str] = mapped_column(String(80), default="Africa/Cairo")
+    break_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    grace_minutes: Mapped[int] = mapped_column(Integer, default=10)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ShiftAssignment(Base):
+    __tablename__ = "shift_assignments"
+    __table_args__ = (UniqueConstraint("user_id", "shift_date", name="uq_shift_assignment_user_date"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    shift_template_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shift_templates.id"), nullable=True, index=True)
+    shift_date: Mapped[date] = mapped_column(Date, index=True)
+    scheduled_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    scheduled_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="SCHEDULED", index=True)
+    notes: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class BreakSession(Base):
+    __tablename__ = "break_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    shift_session_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shift_sessions.id"), nullable=True, index=True)
+    break_type: Mapped[str] = mapped_column(String(32), default="REST", index=True)
+    paid: Mapped[bool] = mapped_column(Boolean, default=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LeaveRequest(Base):
+    __tablename__ = "leave_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    leave_type: Mapped[str] = mapped_column(String(32), default="ANNUAL", index=True)
+    starts_on: Mapped[date] = mapped_column(Date, index=True)
+    ends_on: Mapped[date] = mapped_column(Date, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    reviewed_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OvertimeRequest(Base):
+    __tablename__ = "overtime_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    shift_assignment_id: Mapped[Optional[str]] = mapped_column(ForeignKey("shift_assignments.id"), nullable=True, index=True)
+    requested_minutes: Mapped[int] = mapped_column(Integer)
+    approved_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    reviewed_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReplenishmentEvent(Base):
+    __tablename__ = "replenishment_events"
+    __table_args__ = (UniqueConstraint("event_id", name="uq_replenishment_event_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    event_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    replenishment_task_id: Mapped[str] = mapped_column(ForeignKey("replenishment_tasks.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    device_id: Mapped[Optional[str]] = mapped_column(ForeignKey("devices.id"), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(32), index=True)
+    qty: Mapped[int] = mapped_column(Integer, default=0)
+    source_location_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    destination_location_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class RolePermissionGrant(Base):
+    __tablename__ = "role_permission_grants"
+    __table_args__ = (UniqueConstraint("role", "permission", name="uq_role_permission"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    role: Mapped[str] = mapped_column(String(40), index=True)
+    permission: Mapped[str] = mapped_column(String(120), index=True)
+    allowed: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserPermissionGrant(Base):
+    __tablename__ = "user_permission_grants"
+    __table_args__ = (UniqueConstraint("user_id", "permission", name="uq_user_permission"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    permission: Mapped[str] = mapped_column(String(120), index=True)
+    allowed: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AdminAuditEvent(Base):
+    __tablename__ = "admin_audit_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    actor_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(80), index=True)
+    entity_type: Mapped[str] = mapped_column(String(80), index=True)
+    entity_id: Mapped[str] = mapped_column(String(120), index=True)
+    field_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    old_value_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    new_value_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class PromotionRecord(Base):
+    __tablename__ = "promotion_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    from_role: Mapped[str] = mapped_column(String(40), index=True)
+    to_role: Mapped[str] = mapped_column(String(40), index=True)
+    reason: Mapped[str] = mapped_column(String(300))
+    old_base_salary_cents: Mapped[int] = mapped_column(Integer, default=0)
+    new_base_salary_cents: Mapped[int] = mapped_column(Integer, default=0)
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    approved_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
