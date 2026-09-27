@@ -75,6 +75,9 @@ class ApiPrefixMiddleware:
 
 app = FastAPI(title="FulfillOS", version="0.2.0", lifespan=lifespan)
 app.add_middleware(ApiPrefixMiddleware)
+# Router-level fallback for hosting layers that preserve the public /api prefix
+# but adapt the ASGI app in a way that bypasses outer middleware path mutation.
+app.mount("/api", app, name="api-prefix-alias")
 
 DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
 if DASHBOARD_DIR.exists():
