@@ -62,9 +62,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          resources="$(vercel integration list "$VERCEL_PROJECT" --integration neon --format=json --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN" 2>/dev/null || true)"
+          resources="$(vercel integration list "$VERCEL_PROJECT" --format=json --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN" 2>/dev/null || true)"
           if ! printf '%s' "$resources" | grep -q 'fulfillos-postgres'; then
-            vercel integration add neon --name fulfillos-postgres --plan free -e production -e preview --non-interactive --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+            vercel integration add neon --name fulfillos-postgres --plan free_v3 -e production -e preview --non-interactive --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
           fi
 
       - name: Sync FulfillOS production environment
