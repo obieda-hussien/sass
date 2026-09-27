@@ -301,7 +301,7 @@ def payroll_preview(db: Session, user_id: str, period: str | None = None) -> dic
         "performance_events": by_type,
         "policy_note": (
             "Clock-in/out, lateness, early leave and overtime are calculated automatically. "
-            "Performance metrics never change pay automatically. Attendance deductions are applied only "
+            "Performance metrics do not automatically reduce pay or change role. Attendance deductions are applied only "
             "when an explicit payroll policy enables them; otherwise they remain a review preview."
         ),
     }
