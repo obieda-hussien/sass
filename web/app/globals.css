@@ -682,3 +682,278 @@ select option {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Operations v0.3 */
+.operationsShell {
+  max-width: 1540px;
+}
+
+.opsHeadline {
+  margin-bottom: 14px;
+}
+
+.opsSection {
+  margin-top: 14px;
+}
+
+.operationsGrid {
+  align-items: start;
+}
+
+.workerGrid,
+.shipmentGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 10px;
+}
+
+.workerCard,
+.shipmentCard,
+.orderCard {
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: rgba(255,255,255,0.025);
+}
+
+.workerAvailable {
+  border-color: rgba(109, 214, 167, 0.24);
+}
+
+.workerBlocked {
+  opacity: 0.82;
+}
+
+.workerTop,
+.orderTop,
+.holdRow,
+.slotRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.workerTop > div,
+.orderTop > div,
+.holdRow > div,
+.slotRow > div,
+.shipmentCard > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.workerTop small,
+.orderTop small,
+.holdRow small,
+.slotRow small,
+.shipmentCard small {
+  color: var(--muted);
+}
+
+.workerFacts,
+.orderFacts,
+.shipmentStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.workerFacts span,
+.orderFacts span,
+.shipmentStats span {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: #b9c1d0;
+  font-size: 0.76rem;
+}
+
+.statePill {
+  width: fit-content;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(142, 141, 229, 0.13);
+  color: #deddff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+.state-available,
+.state-completed {
+  background: rgba(109, 214, 167, .11);
+  color: #a9f4d2;
+}
+
+.state-break,
+.state-receiving,
+.state-stowing,
+.state-order-assigned,
+.state-receiving-ambient,
+.state-receiving-chilled,
+.state-receiving-frozen,
+.state-receiving-haz,
+.state-receiving-hrv {
+  background: rgba(241, 191, 104, .11);
+  color: #ffd791;
+}
+
+.state-picking,
+.state-offered {
+  background: var(--accent-soft);
+  color: #deddff;
+}
+
+.blockReason {
+  color: #ffb0b0;
+  font-size: .78rem;
+  line-height: 1.45;
+}
+
+.domainChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.domainChip {
+  border: 1px solid rgba(109, 214, 167, .22);
+  background: rgba(109, 214, 167, .07);
+  color: #baf6dc;
+  padding: 8px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.domainChip.blocked {
+  border-color: rgba(255, 114, 114, .3);
+  background: rgba(255, 114, 114, .08);
+  color: #ffc0c0;
+}
+
+.opsForm {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.opsForm label {
+  display: grid;
+  gap: 6px;
+}
+
+.opsForm label > span {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 650;
+}
+
+.checkField {
+  grid-column: 1 / -1;
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkField input {
+  width: auto;
+}
+
+.holdList,
+.slottingList,
+.orderCards {
+  display: grid;
+  gap: 9px;
+}
+
+.holdRow,
+.slotRow {
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: rgba(255,255,255,.02);
+}
+
+.holdRow button,
+.miniAction {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: #e4e3ff;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+
+.searchBar {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) repeat(2, minmax(190px, .55fr)) auto;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+
+.orderCards {
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+}
+
+.bagRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.orderCard details {
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+}
+
+.orderCard summary {
+  cursor: pointer;
+  color: #cbd1de;
+  font-size: .84rem;
+}
+
+.itemLine {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+  font-size: .8rem;
+}
+
+.itemLine span {
+  color: var(--muted);
+}
+
+.policyNote {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 1.55;
+}
+
+.shipmentCard {
+  grid-template-columns: 1fr auto;
+}
+
+.shipmentStats,
+.shipmentCard .blockReason {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .searchBar,
+  .opsForm {
+    grid-template-columns: 1fr;
+  }
+
+  .checkField,
+  .wideField {
+    grid-column: auto;
+  }
+}
