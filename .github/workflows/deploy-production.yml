@@ -2,6 +2,11 @@ name: Deploy FulfillOS Production
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-production.yml
 
 permissions:
   contents: read
@@ -51,7 +56,7 @@ jobs:
             vercel project add "$VERCEL_PROJECT" --non-interactive --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
           fi
           vercel link --non-interactive --project "$VERCEL_PROJECT" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
-          vercel project update "$VERCEL_PROJECT" --framework services --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+          vercel project update "$VERCEL_PROJECT" --framework services --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
 
       - name: Ensure Neon Postgres exists
         shell: bash
@@ -59,7 +64,7 @@ jobs:
           set -euo pipefail
           resources="$(vercel integration list "$VERCEL_PROJECT" --integration neon --format=json --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN" 2>/dev/null || true)"
           if ! printf '%s' "$resources" | grep -q 'fulfillos-postgres'; then
-            vercel integration add neon --name fulfillos-postgres --plan free -e production -e preview --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+            vercel integration add neon --name fulfillos-postgres --plan free -e production -e preview --non-interactive --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
           fi
 
       - name: Sync FulfillOS production environment
