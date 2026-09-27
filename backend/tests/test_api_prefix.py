@@ -10,5 +10,5 @@ def test_public_api_prefix_is_normalized_before_routing():
 
     assert direct.status_code == 200
     assert prefixed.status_code == 200
-    assert prefixed.json()["version"] == "0.3.0"
+    assert prefixed.json()["version"] == "0.4.0"
     assert prefixed.json()["database"] == "connected"
