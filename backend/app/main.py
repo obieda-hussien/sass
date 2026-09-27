@@ -84,7 +84,7 @@ class ApiPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
-app = FastAPI(title="FulfillOS", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="FulfillOS", version="0.4.0", lifespan=lifespan)
 app.add_middleware(ApiPrefixMiddleware)
 app.include_router(ops_router)
 # Router-level fallback for hosting layers that preserve the public /api prefix
@@ -118,7 +118,7 @@ def manager_actor(who=Depends(actor)) -> tuple[User, Device]:
 
 @app.get("/")
 def root():
-    return {"name": "FulfillOS", "version": "0.3.0", "dashboard": "/dashboard"}
+    return {"name": "FulfillOS", "version": "0.4.0", "dashboard": "/dashboard"}
 
 
 @app.get("/health")
@@ -134,7 +134,7 @@ def health():
     telemetry_status = "connected" if telemetry_ping() else "disabled_or_unavailable"
     return {
         "ok": database_status == "connected",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "database": database_status,
         "telemetry": telemetry_status,
         "server_time": datetime.now(timezone.utc).isoformat(),
