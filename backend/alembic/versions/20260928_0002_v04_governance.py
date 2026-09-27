@@ -143,9 +143,30 @@ def upgrade() -> None:
         _create_index("ix_replenishment_events_event_id", "replenishment_events", ["event_id"], unique=True)
         _create_index("ix_replenishment_events_task_id", "replenishment_events", ["replenishment_task_id"])
 
+    if "promotion_records" not in tables:
+        op.create_table(
+            "promotion_records",
+            sa.Column("id", sa.String(36), primary_key=True),
+            sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+            sa.Column("from_role", sa.String(40), nullable=False),
+            sa.Column("to_role", sa.String(40), nullable=False),
+            sa.Column("reason", sa.String(300), nullable=False),
+            sa.Column("old_base_salary_cents", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("new_base_salary_cents", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("effective_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("approved_by_user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        )
+        _create_index("ix_promotion_records_user_id", "promotion_records", ["user_id"])
+        _create_index("ix_promotion_records_from_role", "promotion_records", ["from_role"])
+        _create_index("ix_promotion_records_to_role", "promotion_records", ["to_role"])
+        _create_index("ix_promotion_records_effective_at", "promotion_records", ["effective_at"])
+        _create_index("ix_promotion_records_approved_by_user_id", "promotion_records", ["approved_by_user_id"])
+
     if "role_permission_grants" not in tables:
         op.create_table(
             "role_permission_grants",
+        "promotion_records",
             sa.Column("id", sa.String(36), primary_key=True),
             sa.Column("role", sa.String(40), nullable=False),
             sa.Column("permission", sa.String(120), nullable=False),
