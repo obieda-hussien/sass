@@ -1,39 +1,297 @@
-# API surface (v0.1)
+# FulfillOS API surface — v0.4
 
-## Authentication
+This document groups the current public/internal API by responsibility. The FastAPI OpenAPI document remains the authoritative machine-readable contract.
 
-- `POST /auth/login`
-- `POST /auth/refresh`
-- `POST /devices/heartbeat`
+Production base:
 
-## Location and inventory
+```text
+https://fulfillos-nine.vercel.app/api
+```
 
-- `GET /locations/parse/{location}`
-- `GET /inventory/product/{asin}`
-- `GET /inventory/location/{location}`
-- `POST /inventory/receive`
-- `POST /inventory/move`
+## Authentication and device session
 
-## Orders and tasks
+```text
+POST /auth/login
+POST /auth/refresh
+POST /auth/forgot-password
+POST /auth/change-password
+POST /devices/heartbeat
+```
 
-- `POST /orders`
-- `POST /orders/{order_id}/allocate`
-- `POST /orders/{order_id}/cancel`
-- `POST /tasks/{task_id}/offer`
-- `POST /tasks/{task_id}/accept`
-- `GET /tasks/{task_id}`
-- `POST /tasks/{task_id}/scan`
-- `POST /tasks/{task_id}/sync`
+Authentication is device-aware. Android uses access + refresh credentials and restores server-owned task state after process/device recovery.
+
+## Catalog, locations and inventory
+
+```text
+GET  /locations/parse/{location}
+GET  /inventory/product/{asin}
+GET  /inventory/location/{location}
+POST /inventory/receive
+POST /inventory/move
+```
+
+Operational inventory routes also expose alerts, cycle-count escalation and fulfillment-orderability information.
+
+## Orders and picking
+
+Core task routes:
+
+```text
+POST /orders
+POST /orders/{order_id}/allocate
+POST /orders/{order_id}/cancel
+GET  /tasks/{task_id}
+POST /tasks/{task_id}/scan
+POST /tasks/{task_id}/sync
+```
+
+v0.4 dispatch/operations routes:
+
+```text
+GET  /ops/dispatch/workers
+POST /ops/dispatch/tasks/{task_id}/broadcast
+GET  /ops/dispatch/me/offers
+POST /ops/dispatch/tasks/{task_id}/claim
+POST /ops/dispatch/tasks/{task_id}/reject
+POST /ops/dispatch/tasks/{task_id}/assign
+POST /ops/tasks/{task_id}/handover
+POST /ops/tasks/{task_id}/optimize-route
+```
+
+Important invariant: claim ownership is server-side and atomic. One picker cannot own two active pick orders.
+
+## Pick exceptions and bags
+
+```text
+POST /ops/tasks/{task_id}/skip
+POST /ops/tasks/{task_id}/damaged
+POST /ops/tasks/{task_id}/bags
+POST /ops/tasks/{task_id}/finish-picking
+GET  /ops/orders/{order_id}/summary
+GET  /ops/orders/search
+```
+
+Order search supports combinations of:
+
+- order ID / external reference;
+- full SPOO or SPOO suffix;
+- picker username;
+- time window.
+
+## Worker operational state
+
+```text
+GET  /ops/me/state
+POST /ops/me/state
+```
+
+Operational state controls dispatch eligibility. Picking is blocked while the worker is in a non-picking activity such as break, receiving, stow, unpack, cycle count or replenishment.
+
+## Shift time, rota, leave and overtime
+
+Direct shift clock endpoints:
+
+```text
+POST /ops/shifts/clock-in
+POST /ops/shifts/clock-out
+```
+
+v0.4 planning endpoints:
+
+```text
+POST /ops/shifts/templates
+GET  /ops/shifts/templates
+POST /ops/shifts/assignments
+GET  /ops/shifts/roster
+POST /ops/shifts/clock-in/auto
+POST /ops/shifts/clock-out/auto
+
+POST /ops/breaks/start
+POST /ops/breaks/end
+
+POST /ops/leave
+POST /ops/leave/{request_id}/review
+
+POST /ops/overtime
+POST /ops/overtime/{request_id}/review
+```
+
+Automatic time calculation includes:
+
+- late after grace;
+- worked minutes;
+- early leave;
+- overtime.
+
+## Workforce / People & Payroll
+
+```text
+GET   /admin/employees
+POST  /admin/employees
+GET   /admin/employees/{user_id}
+PATCH /admin/employees/{user_id}
+
+POST  /admin/employees/{user_id}/promote
+POST  /admin/employees/{user_id}/attendance
+POST  /admin/employees/{user_id}/performance-events
+POST  /admin/employees/{user_id}/pay-adjustments
+GET   /admin/employees/{user_id}/payroll-preview
+
+GET   /admin/password-resets
+POST  /admin/password-resets/{reset_id}/issue-temporary-password
+```
+
+Warehouse promotion ladder:
+
+```text
+PICKER
+→ SENIOR_PICKER
+→ QUALITY
+→ QUALITY_LEADER
+→ TEAM_LEADER
+→ SUPERVISOR
+```
+
+`ADMIN` is outside the warehouse promotion ladder.
+
+## Permission scopes and audit
+
+```text
+GET /ops/permissions/me
+PUT /ops/permissions/roles/{role}
+PUT /ops/permissions/users/{user_id}
+GET /ops/audit
+```
+
+Role/user grants can extend or restrict default role permissions.
+
+## Payroll policy
+
+```text
+GET /ops/payroll-policy/{user_id}
+PUT /ops/payroll-policy/{user_id}
+```
+
+Performance metrics never directly change salary. Attendance deductions are applied only when an explicit payroll policy enables them.
+
+## Fulfillment availability controls
+
+```text
+GET  /ops/availability/holds
+POST /ops/availability/holds
+POST /ops/availability/holds/{hold_id}/resume
+GET  /ops/availability/holds/{hold_id}/impact
+GET  /ops/catalog/{product_id}/orderability
+```
+
+Supported hold scopes:
+
+```text
+SITE
+DOMAIN
+ZONE
+AISLE
+BIN
+SKU
+```
+
+Normal holds affect new orderability/allocation. `hard_stop=true` also blocks affected active pick scans.
+
+## Replenishment
+
+Legacy/read queue:
+
+```text
+GET /ops/replenishment
+```
+
+Executable v0.4 workflow:
+
+```text
+GET  /ops/replenishment/queue
+POST /ops/replenishment/generate
+POST /ops/replenishment/{task_id}/assign
+POST /ops/replenishment/{task_id}/claim
+POST /ops/replenishment/{task_id}/source
+POST /ops/replenishment/{task_id}/item
+POST /ops/replenishment/{task_id}/destination
+POST /ops/replenishment/{task_id}/complete
+POST /ops/replenishment/{task_id}/cancel
+```
+
+The completion event is idempotent and moves inventory through the normal inventory ledger.
+
+## Receiving and stow
+
+```text
+POST /ops/shipments
+GET  /ops/shipments
+GET  /ops/shipments/{shipment_id}
+POST /ops/shipments/{shipment_id}/dock-check-in
+POST /ops/shipments/{shipment_id}/open
+POST /ops/shipments/{shipment_id}/receive
+POST /ops/shipments/{shipment_id}/complete-receive
+
+GET  /ops/stow/{task_id}/recommendations
+POST /ops/stow/{task_id}/complete
+```
+
+HAZ/HRV receiving requires the relevant qualification.
+
+## Topology, capacity and optimization
+
+```text
+POST /ops/topology/nodes
+POST /ops/topology/edges
+GET  /ops/topology
+
+GET /ops/locations/{location_id}/capacity
+PUT /ops/locations/{location_id}/operational-profile
+
+GET  /ops/analytics/heatmap
+GET  /ops/expiry-risk
+POST /ops/simulation/order
+GET  /ops/slotting/suggestions
+```
+
+The optimizer can use configured graph distances, one-way paths and congestion factors. When detailed topology is absent it falls back to location heuristics.
+
+## Incidents and guard rules
+
+```text
+GET  /ops/incidents
+PUT  /ops/guards/{domain}/{rule_type}
+POST /ops/guards/evaluate
+POST /ops/inventory/alerts/{alert_id}/create-cycle-count
+```
+
+Guard rules can automate operational availability decisions such as pausing a domain when no qualified handler is clocked in.
+
+## Performance
+
+```text
+GET /ops/performance
+```
+
+Current factual metrics include order/unit/bag counts, late-SLAM count/rate and average pick time.
 
 ## Technical downtime
 
-- `POST /tasks/{task_id}/downtime/start`
-- `POST /tasks/{task_id}/downtime/{segment_id}/stop`
+```text
+POST /tasks/{task_id}/downtime/start
+POST /tasks/{task_id}/downtime/{segment_id}/stop
+```
 
-## Supervisor
+Downtime segments are used to separate technical delay from accountable associate time.
 
-- `GET /dashboard/summary`
-- `GET /dashboard`
-- `WS /ws/dashboard`
+## API evolution principles
 
-Production follow-up will split internal commands from public/client APIs, add RBAC scopes, request signatures, rate limits, observability ids and an OpenAPI-generated Kotlin client.
+Future API hardening should continue toward:
+
+- OpenAPI-generated Android client models;
+- request/trace IDs;
+- rate limits;
+- short-lived browser sessions;
+- stronger scope enforcement on every sensitive endpoint;
+- transactional outbox/event publication;
+- explicit API versioning where backward compatibility requires it.
