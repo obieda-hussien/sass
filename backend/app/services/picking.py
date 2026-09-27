@@ -19,9 +19,19 @@ from ..models import (
     Product,
     ScanEvent,
     TaskStatus,
+    User,
 )
 from .compatibility import storage_compatible
 from .inventory import InventoryError, move_inventory
+from .ops_platform import (
+    OpsError,
+    acquire_pick_lease,
+    hard_stop_for_location,
+    release_pick_lease,
+    set_worker_state,
+    shortage_side_effects,
+    worker_dispatch_status,
+)
 
 
 class PickError(Exception):
@@ -108,6 +118,24 @@ def task_snapshot(db: Session, task: PickTask) -> dict:
 def accept_task(db: Session, task: PickTask, user_id: str, device_id: str) -> dict:
     if task.status in {TaskStatus.ACCEPTED.value, TaskStatus.PICKING.value}:
         if task.assigned_user_id == user_id and task.assigned_device_id == device_id:
+            try:
+                acquire_pick_lease(
+                    db,
+                    user_id=user_id,
+                    task_id=task.id,
+                    device_id=device_id,
+                    mode="RESUME",
+                )
+                set_worker_state(
+                    db,
+                    user_id,
+                    "PICKING",
+                    activity_ref=task.id,
+                    reason="ORDER_RESUMED",
+                    force=True,
+                )
+            except OpsError as exc:
+                raise PickError(str(exc), exc.code) from exc
             return task_snapshot(db, task)
         raise PickError("Task is already owned by another associate/device", "OWNERSHIP_MISMATCH")
     if task.status not in {TaskStatus.OFFERED.value, TaskStatus.READY.value}:
@@ -116,6 +144,29 @@ def accept_task(db: Session, task: PickTask, user_id: str, device_id: str) -> di
         raise PickError("Task is assigned to another associate", "ASSIGNMENT_MISMATCH")
     if task.assigned_device_id and task.assigned_device_id != device_id:
         raise PickError("Task is assigned to another device", "DEVICE_MISMATCH")
+
+    user = db.get(User, user_id)
+    if user is None:
+        raise PickError("Associate not found", "WORKER_NOT_FOUND")
+    direct_assignment = task.assigned_user_id == user_id
+    dispatch = worker_dispatch_status(db, user, task if direct_assignment else None)
+    if not dispatch["dispatchable"]:
+        raise PickError(
+            "Picker is not available: " + ", ".join(dispatch["reasons"]),
+            "PICKER_NOT_ELIGIBLE",
+        )
+
+    try:
+        acquire_pick_lease(
+            db,
+            user_id=user_id,
+            task_id=task.id,
+            device_id=device_id,
+            mode="LEGACY_ACCEPT",
+        )
+    except OpsError as exc:
+        raise PickError(str(exc), exc.code) from exc
+
     now = datetime.now(timezone.utc)
     task.assigned_user_id = user_id
     task.assigned_device_id = device_id
@@ -125,9 +176,19 @@ def accept_task(db: Session, task: PickTask, user_id: str, device_id: str) -> di
     order = db.get(Order, task.order_id)
     if order:
         order.status = OrderStatus.PICKING.value
+    try:
+        set_worker_state(
+            db,
+            user_id,
+            "PICKING",
+            activity_ref=task.id,
+            reason="ORDER_ACCEPTED",
+            force=True,
+        )
+    except OpsError as exc:
+        raise PickError(str(exc), exc.code) from exc
     db.flush()
     return task_snapshot(db, task)
-
 
 def _validate_barcode(db: Session, barcode: str | None, product_id: str) -> None:
     if barcode is None:
@@ -177,6 +238,17 @@ def commit_pick(
         raise PickError("Wrong product", "PRODUCT_MISMATCH")
     if item.source_location_id != location_id:
         raise PickError("Wrong bin/location", "LOCATION_MISMATCH")
+
+    product = db.get(Product, product_id)
+    location = db.get(Location, location_id)
+    if product is None or location is None:
+        raise PickError("Unknown product/location", "NOT_FOUND")
+    hard_hold = hard_stop_for_location(db, product, location)
+    if hard_hold is not None:
+        raise PickError(
+            f"Picking is hard-stopped for {hard_hold.scope_type}:{hard_hold.scope_value}",
+            "FULFILLMENT_HARD_STOP",
+        )
 
     _validate_barcode(db, barcode, product_id)
 
@@ -343,6 +415,16 @@ def short_pick(
         ),
         server_version_after=task.server_version,
     ))
+    shortage_side_effects(
+        db,
+        event_id=event_id,
+        task=task,
+        item=item,
+        user_id=user_id,
+        exception_type="SHORT",
+        reason=reason,
+        qty=qty,
+    )
 
     remaining_total = db.scalar(
         select(func.sum(PickTaskItem.planned_qty - PickTaskItem.picked_qty))
@@ -534,6 +616,7 @@ def cancel_order(db: Session, order: Order, reason: str) -> dict:
     else:
         order.status = OrderStatus.CANCELLED.value
         task.status = TaskStatus.CANCELLED.value
+        release_pick_lease(db, task, reason="ORDER_CANCELLED")
 
     task.server_version += 1
     db.flush()
