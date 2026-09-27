@@ -23,6 +23,27 @@ jobs:
         working-directory: backend
         run: pytest -q
 
+  web:
+    name: Control tower build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install
+        run: npm install
+      - name: Typecheck
+        run: npm run lint
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
+        run: npm run build
+
   android:
     runs-on: ubuntu-latest
     steps:

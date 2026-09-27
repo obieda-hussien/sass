@@ -705,6 +705,88 @@ def dashboard_summary(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/v1/control-tower/summary")
+def control_tower_compat_summary(db: Session = Depends(get_db)):
+    """Compatibility/read-model endpoint for the Next.js supervisor control tower."""
+    tasks = db.scalars(select(PickTask)).all()
+    devices = db.scalars(select(Device)).all()
+
+    task_counts: dict[str, int] = {}
+    for task in tasks:
+        state = "PACKING_RACKING" if task.status == TaskStatus.PACK_RACK.value else task.status
+        task_counts[state] = task_counts.get(state, 0) + 1
+
+    associate_states = {
+        "WAITING": 0,
+        "OFFERED": 0,
+        "PICKING": 0,
+        "PACKING_RACKING": 0,
+        "BREAK": 0,
+        "OTHER_ACTIVITY": 0,
+        "OFFLINE": 0,
+    }
+    active_by_user: dict[str, str] = {}
+    active_statuses = {
+        TaskStatus.OFFERED.value,
+        TaskStatus.ACCEPTED.value,
+        TaskStatus.PICKING.value,
+        TaskStatus.PICKED.value,
+        TaskStatus.PACK_RACK.value,
+        TaskStatus.STAGED.value,
+        TaskStatus.HANDOFF_READY.value,
+        TaskStatus.HANDED_OFF.value,
+        TaskStatus.CANCEL_PENDING.value,
+        TaskStatus.RECOVERY_REQUIRED.value,
+    }
+    for task in sorted(tasks, key=lambda item: item.updated_at or datetime.min.replace(tzinfo=timezone.utc)):
+        if not task.assigned_user_id or task.status not in active_statuses:
+            continue
+        if task.status == TaskStatus.OFFERED.value:
+            state = "OFFERED"
+        elif task.status in {TaskStatus.ACCEPTED.value, TaskStatus.PICKING.value, TaskStatus.PICKED.value}:
+            state = "PICKING"
+        elif task.status == TaskStatus.PACK_RACK.value:
+            state = "PACKING_RACKING"
+        else:
+            state = "OTHER_ACTIVITY"
+        active_by_user[task.assigned_user_id] = state
+
+    for state in active_by_user.values():
+        associate_states[state] += 1
+
+    device_state_by_user: dict[str, str] = {}
+    for device in devices:
+        if not device.last_user_id:
+            continue
+        current = device_state_by_user.get(device.last_user_id)
+        if current != "ONLINE":
+            device_state_by_user[device.last_user_id] = "ONLINE" if device.status == "ONLINE" else "OFFLINE"
+
+    for user_id, device_state in device_state_by_user.items():
+        if user_id in active_by_user:
+            continue
+        associate_states["WAITING" if device_state == "ONLINE" else "OFFLINE"] += 1
+
+    recovery_required = []
+    for task in tasks:
+        if task.status != TaskStatus.RECOVERY_REQUIRED.value:
+            continue
+        order = db.get(Order, task.order_id)
+        recovery_required.append({
+            "taskId": task.id,
+            "orderId": task.order_id,
+            "associateId": task.assigned_user_id,
+            "reason": order.cancellation_reason if order else None,
+            "version": task.server_version,
+        })
+
+    return {
+        "associates": associate_states,
+        "tasks": task_counts,
+        "recoveryRequired": recovery_required,
+    }
+
+
 @app.websocket("/ws/dashboard")
 async def dashboard_ws(ws: WebSocket):
     await ws.accept()

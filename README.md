@@ -22,7 +22,8 @@ FulfillOS treats those as architectural problems, not UI bugs.
 
 ```text
 backend/      FastAPI reference backend + SQLAlchemy ledger + tests
-dashboard/    Zero-dependency control-tower UI
+web/          Next.js supervisor control tower
+dashboard/    Zero-dependency control-tower fallback
 android/      Kotlin/Jetpack Compose PDA client architecture
 docs/         Domain, reliability, location grammar and workflow specs
 infra/        Postgres/Redis/NATS local infrastructure
@@ -96,3 +97,16 @@ The first test suite covers location parsing, idempotent inventory movement, dup
 ## Current status
 
 This is the first executable foundation, not the finished warehouse product. The next build slices are documented in `docs/ROADMAP.md`.
+
+
+## Supervisor web control tower
+
+The `web/` app is a Next.js control tower that consumes the compatibility read-model endpoint at `/v1/control-tower/summary`.
+
+```bash
+cd web
+npm install
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8080 npm run dev
+```
+
+For Vercel Services, the web app is mounted at `/` and the FastAPI service at `/api`; see `vercel.json` and `docs/DEPLOYMENT.md`.

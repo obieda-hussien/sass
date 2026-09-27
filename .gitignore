@@ -5,19 +5,30 @@ __pycache__/
 .venv/
 *.db
 
+# Node
+node_modules/
+.next/
+out/
+
 # Android / Gradle
 .gradle/
 build/
 **/build/
 local.properties
 .idea/
+.vscode/
 *.iml
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Secrets
+# Environment / secrets
 .env
+.env.*
+!.env.example
 *.jks
 *.keystore
+
+# Vercel
+.vercel/
