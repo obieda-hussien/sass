@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models import User
 from app.security import verify_password
@@ -27,4 +27,6 @@ def test_bootstrap_users_are_idempotent(db, monkeypatch):
     assert supervisor.role == "SUPERVISOR"
     assert verify_password("supervisor-secret", supervisor.password_hash)
 
-    assert db.scalar(select(User).where(User.username == "prod-picker").count()) if False else True
+    assert db.scalar(
+        select(func.count()).select_from(User).where(User.username.in_(["prod-picker", "prod-supervisor"]))
+    ) == 2
