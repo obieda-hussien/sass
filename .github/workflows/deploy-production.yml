@@ -10,6 +10,7 @@ on:
       - vercel.json
       - backend/**
       - web/**
+      - android/**
 
 permissions:
   contents: read
@@ -170,17 +171,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FulfillOS-v0.2.0-prod-debug.apk
-          cp android/app/build/outputs/apk/release/app-release.apk dist/FulfillOS-v0.2.0-prod-release.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FulfillOS-v0.2.1-prod-debug.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist/FulfillOS-v0.2.1-prod-release.apk
           printf '%s\n' "${{ steps.verify.outputs.url }}" > dist/production-url.txt
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: FulfillOS-v0.2.0-production-apks
+          name: FulfillOS-v0.2.1-production-apks
           path: |
-            dist/FulfillOS-v0.2.0-prod-debug.apk
-            dist/FulfillOS-v0.2.0-prod-release.apk
+            dist/FulfillOS-v0.2.1-prod-debug.apk
+            dist/FulfillOS-v0.2.1-prod-release.apk
             dist/production-url.txt
             dist/SHA256SUMS.txt
           if-no-files-found: error
@@ -192,5 +193,5 @@ jobs:
             echo "## FulfillOS Production"
             echo "- URL: ${{ steps.verify.outputs.url }}"
             echo "- API health: ${{ steps.verify.outputs.url }}/api/health"
-            echo "- Android artifacts: FulfillOS-v0.2.0-production-apks"
+            echo "- Android artifacts: FulfillOS-v0.2.1-production-apks"
           } >> "$GITHUB_STEP_SUMMARY"

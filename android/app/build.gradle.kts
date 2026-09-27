@@ -3,10 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val apiBaseUrl = providers.gradleProperty("FULFILLOS_API_BASE_URL")
+val configuredApiBaseUrl = providers.gradleProperty("FULFILLOS_API_BASE_URL")
     .orElse(providers.environmentVariable("FULFILLOS_API_BASE_URL"))
-    .orElse("http://10.0.2.2:8080")
-    .get()
 
 android {
     namespace = "com.obieda.fulfillos"
@@ -16,20 +14,26 @@ android {
         applicationId = "com.obieda.fulfillos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
-        buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
+        versionCode = 3
+        versionName = "0.2.1"
     }
 
     buildTypes {
         getByName("debug") {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            val debugUrl = configuredApiBaseUrl.orElse("http://10.0.2.2:8080").get()
+            buildConfigField("String", "API_BASE_URL", "\"$debugUrl\"")
         }
         getByName("release") {
             isDebuggable = false
             isMinifyEnabled = false
-            // Internal installable release. Production/Play builds must use a private release key.
+            val releaseUrl = configuredApiBaseUrl.orNull
+                ?: error("FULFILLOS_API_BASE_URL must be set for release builds")
+            require(releaseUrl.startsWith("https://")) {
+                "Release API URL must use HTTPS: $releaseUrl"
+            }
+            buildConfigField("String", "API_BASE_URL", "\"$releaseUrl\"")
             signingConfig = signingConfigs.getByName("debug")
         }
     }
