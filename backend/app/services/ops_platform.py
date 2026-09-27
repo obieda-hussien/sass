@@ -47,6 +47,11 @@ from ..models_ops import (
 )
 from .compatibility import storage_compatible
 from .inventory import InventoryError, move_inventory
+from .ops_optimization import (
+    destination_has_capacity,
+    distance_to_task_first_item,
+    worker_domain_reasons,
+)
 
 
 ACTIVE_PICK_STATES = {
@@ -253,6 +258,8 @@ def worker_dispatch_status(db: Session, user: User, task: PickTask | None = None
     required = task_required_qualifications(db, task) if task else set()
     missing = sorted(required - worker_qualifications(db, user.id))
     reasons.extend(f"MISSING_{value}_QUALIFICATION" for value in missing)
+    reasons.extend(worker_domain_reasons(db, user.id, task))
+    estimated_walk = distance_to_task_first_item(db, task, user.id) if task else None
 
     return {
         "user_id": user.id,
@@ -264,6 +271,7 @@ def worker_dispatch_status(db: Session, user: User, task: PickTask | None = None
         "required_qualifications": sorted(required),
         "qualifications": sorted(worker_qualifications(db, user.id)),
         "active_task_id": active_task.id if active_task else None,
+        "estimated_walk_to_first_item_m": estimated_walk,
     }
 
 
@@ -1698,7 +1706,18 @@ def recommend_stow_locations(db: Session, shipment: Shipment, product_id: str, l
             Location.sellable == True,  # noqa: E712
         )
     ).all()
-    compatible = [loc for loc in locations if storage_compatible(product, loc)[0]]
+    stow_qty = db.scalar(
+        select(func.max(StowTask.qty)).where(
+            StowTask.shipment_id == shipment.id,
+            StowTask.product_id == product_id,
+            StowTask.status.in_(["READY", "ASSIGNED"]),
+        )
+    ) or 1
+    compatible = [
+        loc for loc in locations
+        if storage_compatible(product, loc)[0]
+        and destination_has_capacity(db, loc.id, int(stow_qty))
+    ]
     scored = []
     for loc in compatible:
         bal = db.scalar(
