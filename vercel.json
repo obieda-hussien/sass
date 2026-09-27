@@ -2,34 +2,25 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "services": {
     "web": {
-      "root": "web/"
+      "root": "web/",
+      "framework": "nextjs"
     },
     "api": {
       "root": "backend/",
-      "entrypoint": "app.main:app",
-      "routes": [
-        {
-          "src": "/api/(.*)",
-          "transforms": [
-            {
-              "type": "request.path",
-              "op": "set",
-              "args": "/$1"
-            }
-          ]
-        }
-      ]
+      "framework": "fastapi",
+      "entrypoint": "app.main:app"
     }
   },
   "rewrites": [
     {
-      "source": "/api/(.*)",
+      "source": "/api/:path*",
       "destination": {
-        "service": "api"
+        "service": "api",
+        "path": "/:path*"
       }
     },
     {
-      "source": "/(.*)",
+      "source": "/:path*",
       "destination": {
         "service": "web"
       }
