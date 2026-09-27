@@ -3,13 +3,14 @@ name: FulfillOS CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -25,7 +26,7 @@ jobs:
 
   web:
     name: Control tower build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
@@ -45,7 +46,8 @@ jobs:
         run: npm run build
 
   android:
-    runs-on: ubuntu-latest
+    name: Android APKs
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
@@ -55,6 +57,32 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.6.0'
-      - name: Android debug build
+
+      - name: Build debug and internal release APKs
         working-directory: android
-        run: gradle --no-daemon :app:assembleDebug
+        env:
+          FULFILLOS_API_BASE_URL: ${{ vars.FULFILLOS_API_BASE_URL || 'http://10.0.2.2:8080' }}
+        run: gradle --no-daemon :app:assembleDebug :app:assembleRelease
+
+      - name: Prepare named APKs
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FulfillOS-v0.2.0-debug.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist/FulfillOS-v0.2.0-release.apk
+          ls -lh dist
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FulfillOS-v0.2.0-debug
+          path: dist/FulfillOS-v0.2.0-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FulfillOS-v0.2.0-release
+          path: dist/FulfillOS-v0.2.0-release.apk
+          if-no-files-found: error
+          retention-days: 30
