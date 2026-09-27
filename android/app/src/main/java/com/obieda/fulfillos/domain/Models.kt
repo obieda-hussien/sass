@@ -58,7 +58,7 @@ data class PendingPickEvent(
     val createdAtEpochMs: Long,
     val state: State,
 ) {
-    enum class Kind { PICK, SHORT }
+    enum class Kind { PICK, SHORT, SKIP, DAMAGED }
     enum class State { PENDING, SENDING, ACKED, REJECTED }
 }
 
@@ -121,3 +121,38 @@ data class BarcodeProduct(
 
 enum class OperationMode { UNPACK, BOH, DAMAGE }
 enum class OperationScanPhase { SOURCE, ITEM, DESTINATION, SYNCING }
+
+
+data class PickOfferSummary(
+    val task: TaskSnapshot,
+    val expiresAt: String?,
+)
+
+data class ClosedBagSummary(
+    val bagNo: Int,
+    val spooLast4: String,
+)
+
+data class CompletionItem(
+    val title: String,
+    val requestedQty: Int,
+    val pickedQty: Int,
+    val shortedQty: Int,
+)
+
+data class OrderCompletionSummary(
+    val orderId: String,
+    val externalRef: String?,
+    val pickerUsername: String?,
+    val items: List<CompletionItem>,
+    val bagCount: Int,
+    val bags: List<ClosedBagSummary>,
+    val pickedUnits: Int,
+    val shortedUnits: Int,
+)
+
+data class WorkerOperationalState(
+    val state: String,
+    val activityRef: String?,
+    val dispatchBlocked: Boolean,
+)
