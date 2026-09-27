@@ -130,7 +130,16 @@ def update_employee(db: Session, user: User, payload: Any) -> None:
 
     values = payload.model_dump(exclude_unset=True)
     if "role" in values and values["role"] is not None:
-        user.role = normalize_role(values.pop("role"))
+        requested_role = normalize_role(values.pop("role"))
+        current_role = normalize_role(user.role)
+        if requested_role != current_role and (
+            requested_role in ROLE_LEVELS or current_role in ROLE_LEVELS
+        ):
+            raise WorkforceError(
+                "Warehouse rank changes must use the audited promotion/role-change workflow",
+                "USE_RANK_CHANGE_WORKFLOW",
+            )
+        user.role = requested_role
     if "active" in values and values["active"] is not None:
         user.active = bool(values.pop("active"))
 
