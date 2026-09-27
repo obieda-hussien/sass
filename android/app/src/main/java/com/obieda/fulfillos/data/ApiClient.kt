@@ -227,7 +227,10 @@ class ApiClient {
         val root = JSONObject(body)
         val offers = root.optJSONArray("offers") ?: return null
         if (offers.length() == 0) return null
-        return parseTask(offers.getJSONObject(0).getJSONObject("task"))
+        val offer = offers.getJSONObject(0)
+        return parseTask(offer.getJSONObject("task")).copy(
+            offerExpiresAt = offer.nullableString("expires_at"),
+        )
     }
 
     fun parseClosedBag(body: String): ClosedBagSummary {
