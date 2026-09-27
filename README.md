@@ -2,7 +2,7 @@
 
 Clean-room micro-fulfillment execution system inspired by real warehouse workflows, without using proprietary source code, private endpoints, credentials, or brand assets.
 
-This repository starts with the reliability layer first: inventory ledger, physical/logical locations, order allocation, idempotent pick events, cancellation recovery, device-bound sessions, downtime-aware SLA accounting, an Android PDA architecture, and a supervisor control tower.
+This repository starts with the reliability layer first and now includes the v0.3 operations platform: inventory ledger, atomic one-picker/one-order dispatch, order/SPOO history, fulfillment-area controls, receiving/stow workflows, short/skip/damage automation, workforce state, attendance/payroll calculations, an Android PDA client, and a supervisor operations console.
 
 ## Why this exists
 
@@ -81,7 +81,7 @@ password: demo1234
 device:   PDA-DEMO-001
 ```
 
-Open `http://127.0.0.1:8080/dashboard` for the supervisor view.
+Open `http://127.0.0.1:8080/dashboard` for the fallback supervisor view. Run the Next.js app for /operations (dispatch, holds, Order Explorer, inbound and metrics) and /people (workforce/payroll).
 
 The default demo uses SQLite. Production should set `DATABASE_URL` to PostgreSQL and run schema migrations rather than `create_all`.
 
@@ -110,3 +110,22 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8080 npm run dev
 ```
 
 For Vercel Services, the web app is mounted at `/` and the FastAPI service at `/api`; see `vercel.json` and `docs/DEPLOYMENT.md`.
+
+## v0.3 operations platform
+
+- Hard one-picker / one-active-order database lease.
+- Broadcast offers with atomic first-winner claims and supervisor direct assignment.
+- Worker operational states block dispatch during break, receiving, stow, unpack, cycle count and similar work.
+- Order Explorer by date/time, order id, picker username, full SPOO or SPOO suffix.
+- Multi-bag SPOO close with full barcode storage and last-four picker summary.
+- Warm-to-cold route sequencing plus FEFO-aware stock selection when expiry lots exist.
+- Fulfillment holds at site/domain/zone/aisle/bin/SKU scope without falsifying physical inventory.
+- Separate physical, fulfillable and blocked stock.
+- Skip, short and damaged-item handling with repeated-short alerts and replenishment candidates.
+- Shipment receiving, discrepancy reconciliation, cold-chain timers and stow recommendations.
+- Shift clock-in/out with automatic late, early-leave, worked-time and overtime calculations.
+- Explicit payroll deduction policy; performance metrics never change role or pay automatically.
+- Demand-based slotting suggestions that require an operations decision.
+- Web Operations Console and Android broadcast-offer / bag-completion flow.
+
+See BUILD_REPORT.md, docs/WORKFLOWS.md and docs/ROADMAP.md for detail.
