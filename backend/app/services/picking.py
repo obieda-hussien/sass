@@ -21,11 +21,13 @@ from ..models import (
     TaskStatus,
     User,
 )
+from ..models_ops import PickOffer
 from .compatibility import storage_compatible
 from .inventory import InventoryError, move_inventory
 from .ops_platform import (
     OpsError,
     acquire_pick_lease,
+    claim_task as atomic_claim_task,
     hard_stop_for_location,
     release_pick_lease,
     set_worker_state,
@@ -140,6 +142,21 @@ def accept_task(db: Session, task: PickTask, user_id: str, device_id: str) -> di
         raise PickError("Task is already owned by another associate/device", "OWNERSHIP_MISMATCH")
     if task.status not in {TaskStatus.OFFERED.value, TaskStatus.READY.value}:
         raise PickError(f"Task cannot be accepted from {task.status}", "INVALID_STATE")
+
+    # Broadcast offers must use the same atomic claim path as /ops/.../claim.
+    # This keeps the legacy PDA accept endpoint safe during rollout.
+    has_broadcast_offer = db.scalar(
+        select(PickOffer.id).where(
+            PickOffer.task_id == task.id,
+            PickOffer.status == "OPEN",
+        ).limit(1)
+    )
+    if task.assigned_user_id is None and has_broadcast_offer is not None:
+        try:
+            claimed = atomic_claim_task(db, task, user_id, device_id)
+            return task_snapshot(db, claimed)
+        except OpsError as exc:
+            raise PickError(str(exc), exc.code) from exc
     if task.assigned_user_id and task.assigned_user_id != user_id:
         raise PickError("Task is assigned to another associate", "ASSIGNMENT_MISMATCH")
     if task.assigned_device_id and task.assigned_device_id != device_id:
