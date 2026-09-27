@@ -48,9 +48,9 @@ jobs:
         run: |
           set -euo pipefail
           if ! vercel project inspect "$VERCEL_PROJECT" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN" >/dev/null 2>&1; then
-            vercel project add "$VERCEL_PROJECT" --yes --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+            vercel project add "$VERCEL_PROJECT" --non-interactive --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
           fi
-          vercel link --yes --project "$VERCEL_PROJECT" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
+          vercel link --non-interactive --project "$VERCEL_PROJECT" --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
           vercel project update "$VERCEL_PROJECT" --framework services --scope "$VERCEL_TEAM_ID" --token "$VERCEL_TOKEN"
 
       - name: Ensure Neon Postgres exists
