@@ -1,88 +1,246 @@
-# Build roadmap
+# FulfillOS roadmap
 
-## P0 — reliability kernel — implemented in this foundation
+_Status snapshot: 28 September 2026._
 
-- location grammar and special/logical bins;
+## P0 — reliability kernel — implemented
+
+- location grammar and logical/special locations;
 - catalog + barcode entities;
-- inventory balance + immutable movement records;
+- inventory balance + movement ledger;
 - idempotent stock movement;
-- deterministic order allocation;
-- pick tasks with server version and client sequence;
-- durable-event protocol contract;
+- deterministic allocation;
+- pick task server version + client sequence;
+- durable-event protocol;
 - mid-pick cancellation recovery;
 - device-bound session/refresh model;
 - downtime-aware SLA accounting;
 - supervisor dashboard;
-- automated tests for the critical invariants.
+- critical-invariant tests.
 
-## P1 — operational depth — substantially implemented in v0.3
+## P1 — operational depth — substantially implemented
 
-- **implemented core:** Receive v3 shipment → dock/open → receive → discrepancy → stow flow;
-- **implemented backend:** Unpack sessions with ambient/chilled/frozen tote enforcement;
-- **implemented backend:** BOH move and destination compatibility validation; Bulk move UI remains;
-- **implemented backend:** damage reasons and DMG movement; richer disposition lifecycle remains;
-- **implemented backend:** cycle count and adjustment application; supervisor approval layer remains;
-- **implemented:** separate skip / short / damaged workflows with repeated-short alerting and replenishment candidates;
-- **implemented backend:** pack/rack, stage, handoff and delivery completion; PDA screens remain;
-- **implemented:** HAZ and HRV worker qualifications used by receiving and dispatch;
-- barcode-ASIN management UI;
-- explicit `SPECIAL` bin policy once site semantics are known.
+Implemented:
 
-## P2 — Android production client
+- Receive v3 core: shipment → dock/open → receive → discrepancy → stow;
+- Unpack backend with temperature-aware temporary totes;
+- BOH move and destination compatibility;
+- damage/DMG movement;
+- cycle count backend;
+- skip / short / damaged pick exceptions;
+- repeated-short alerts;
+- replenishment candidate creation;
+- HAZ/HRV qualifications;
+- pack/rack/stage/handoff backend;
+- multi-bag SPOO;
+- Order Explorer;
+- fulfillment holds;
+- cold-chain timers;
+- expiry/lot awareness;
+- stow capacity checks.
 
-- Room database for session snapshot, tasks and pending event journal;
-- hardware barcode scanner intent/profile adapters;
+Remaining:
+
+- richer disposition lifecycle after damage;
+- polished barcode/ASIN management UI;
+- full SPECIAL-bin site policy;
+- full handheld UI for several non-pick workflows.
+
+## P2 — Android production client — partially implemented
+
+Implemented:
+
+- Kotlin + Jetpack Compose;
+- durable local pick-event journal;
+- session/task recovery;
+- WorkManager retry infrastructure;
+- connectivity handling;
+- production endpoint safety;
+- broadcast offers;
+- atomic accept;
+- pick scanning;
+- skip / short / damaged;
+- multi-bag SPOO;
+- completion summary;
+- worker state integration;
+- inventory/barcode tools;
+- screen models/routing for additional operational modules.
+
+Still required:
+
+- complete production-grade Receive screen;
+- complete Unpack screen;
+- complete BOH Move screen;
+- complete Damage disposition screen;
+- complete Cycle Count screen;
+- complete Recovery screen;
+- complete Replenishment handheld flow;
+- industrial scanner intent/profile adapters;
 - camera fallback scanner;
-- WorkManager sync worker;
-- connectivity state machine;
-- secure refresh token storage with Android Keystore;
-- foreground task service while actively picking;
-- boot/restart recovery;
-- device health telemetry;
-- Compose screens for pick, inventory viewer, receive, unpack, BOH and metrics;
-- RTL-ready localization.
+- stronger foreground-task UX;
+- localization/RTL polish;
+- device-health and recovery diagnostics.
 
-## P3 — distributed production backend
+## P3 — production backend / governance — partially implemented
 
-- PostgreSQL migrations with Alembic;
-- row-level concurrency strategy and stronger serializable invariants where required;
+Implemented:
+
+- PostgreSQL / Neon production DB;
+- Alembic baseline;
+- safe startup migration runner;
+- PostgreSQL advisory migration lock;
+- role/user permission grants;
+- admin audit-event model;
+- worker runtime state;
+- active pick leases;
+- operational incidents;
+- guard rules;
+- workforce profiles;
+- rank promotion history;
+- rota/shift templates;
+- break/leave/overtime workflows;
+- explicit payroll attendance policy;
+- production Vercel deployment.
+
+Still required:
+
 - transactional outbox;
-- NATS JetStream event distribution;
-- Redis hot projections/locks only where justified;
-- WebSocket/SSE live control tower;
-- observability: OpenTelemetry traces, structured logs and metrics;
-- backup/restore and disaster recovery;
-- multi-site partitioning.
+- event bus / live projection distribution;
+- SSE/WebSocket live control tower;
+- OpenTelemetry tracing;
+- structured production metrics;
+- backup/restore drills;
+- disaster recovery;
+- stronger multi-site tenancy/isolation model;
+- complete audit coverage for every sensitive employee/payroll mutation;
+- short-lived browser sessions + CSRF protection.
 
-## P4 — optimization
+## P4 — optimization — baseline implemented, calibration remains
 
-- **implemented baseline:** warm → chilled → frozen route sequencing;
-- physical site graph and measured walking costs;
-- route optimizer with cold-chain ordering constraints;
-- **implemented baseline:** demand/velocity slotting recommendations; cube/capacity scoring remains;
-- demand forecasting integrations;
-- wave/batch picking where site operations support it;
-- labor planning without attributing infrastructure downtime to associates;
-- anomaly detection for repeated scans, impossible movements and inventory drift.
+Implemented:
 
-## P5 — hardware and facility integrations
+- warm/ambient before chilled before frozen;
+- topology nodes/edges;
+- route-distance engine;
+- one-way edge support;
+- congestion-factor support;
+- heuristic fallback;
+- FEFO-aware selection;
+- demand/velocity slotting suggestions;
+- capacity profiles;
+- warehouse heatmap;
+- expiry risk;
+- order-route simulation.
 
-- environmental sensors and cold-chain alert ingestion;
-- electronic shelf labels;
-- industrial printer/label workflows;
+Still required:
+
+- measured site walk distances;
+- real one-way path map;
+- live congestion calibration;
+- cube/volume-aware capacity;
+- demand forecasting;
+- labor planning;
+- anomaly detection;
+- richer replenishment priority/SLA;
+- optional wave/batch picking if site operations adopt it.
+
+## P5 — workforce maturity
+
+Implemented foundation:
+
+- employee onboarding;
+- contact/job/payroll data;
+- attendance;
+- overtime;
+- payroll preview;
+- password-reset queue;
+- shift templates;
+- rota assignments;
+- breaks;
+- leave requests;
+- overtime requests;
+- permission scopes;
+- promotion history.
+
+Warehouse rank ladder:
+
+```text
+PICKER
+→ SENIOR_PICKER
+→ QUALITY
+→ QUALITY_LEADER
+→ TEAM_LEADER
+→ SUPERVISOR
+```
+
+Remaining:
+
+- verified email/SMS self-service password reset;
+- HR field retention/export/delete policy;
+- broader sensitive-data audit;
+- richer employee self-service;
+- configurable performance-review periods;
+- promotion eligibility recommendations with explicit human approval;
+- salary-policy/version history;
+- statutory payroll/tax rules only if required by the deployment jurisdiction.
+
+## P6 — hardware and facility integrations
+
+Planned:
+
+- production signing / Play App Signing;
 - MDM/kiosk enrollment;
+- industrial scanner profiles;
 - NFC/badge sign-in;
-- rack/stage indicators where hardware supports them.
+- label/printer workflows;
+- environmental/cold-chain sensors;
+- shelf/rack indicators;
+- electronic shelf labels.
 
-## v0.3 completed cross-cutting work
+## v0.3 milestone — completed
 
 - one-picker/one-order hard lease;
-- broadcast first-winner dispatch and supervisor assignment;
-- operational work-state gating;
-- Order Explorer with SPOO and picker search;
-- multi-bag completion;
-- fulfillment-area pause/resume without falsifying inventory;
-- automatic shift time calculations and explicit payroll policies;
-- receiving/stow/cold-chain timers;
-- fast-mover suggestions;
-- Android PDA support for broadcast offers, skip/short/damage and bag close.
+- atomic broadcast claim;
+- supervisor assignment;
+- operational-state dispatch gating;
+- Order Explorer;
+- multi-bag SPOO;
+- fulfillment holds;
+- receiving/stow core;
+- automatic shift time calculations;
+- performance dashboard;
+- topology/route optimization baseline.
+
+## v0.4 milestone — completed
+
+- Alembic migration framework;
+- safe pre-Alembic production baseline;
+- migration advisory lock;
+- executable replenishment;
+- proactive low-stock replenishment candidates;
+- shift templates + rota;
+- automatic scheduled clock in/out;
+- break sessions;
+- leave/overtime request workflows;
+- permission scopes;
+- admin audit events;
+- warehouse rank ladder;
+- explicit audited promotion workflow;
+- promotion history in People & Payroll;
+- Team Leader operations access;
+- Quality/Quality Leader scoped permissions;
+- Android v0.4 routing/model integration;
+- deployment health version fixed to v0.4;
+- APK artifact names derived from Gradle version.
+
+## Immediate next engineering sequence
+
+1. finish non-pick Android operational screens;
+2. industrial scanner + camera fallback;
+3. production app signing;
+4. browser session/cookie hardening;
+5. full sensitive-change audit coverage;
+6. verified self-service password recovery;
+7. transactional outbox + live event projections;
+8. observability/incident notification;
+9. measured warehouse topology calibration;
+10. replenishment SLA/priority UX.
