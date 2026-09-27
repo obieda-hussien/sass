@@ -32,6 +32,7 @@ from ..models_ops import (
     InventoryAlert,
     InventoryLot,
     OrderBag,
+    OperationalIncident,
     PayrollPolicy,
     PickException,
     PickOffer,
@@ -50,6 +51,7 @@ from .inventory import InventoryError, move_inventory
 from .ops_optimization import (
     destination_has_capacity,
     distance_to_task_first_item,
+    evaluate_guard_rules,
     worker_domain_reasons,
 )
 
@@ -882,6 +884,20 @@ def create_hold(
     )
     db.add(hold)
     db.flush()
+    db.add(OperationalIncident(
+        incident_type="FULFILLMENT_HOLD",
+        severity="CRITICAL" if hard_stop else "MEDIUM",
+        site_id=hold.site_id,
+        scope_type=hold.scope_type,
+        scope_value=hold.scope_value,
+        source_ref=hold.id,
+        details_json=json.dumps(
+            {"reason": hold.reason, "hard_stop": hold.hard_stop},
+            separators=(",", ":"),
+        ),
+        created_by_user_id=created_by_user_id,
+    ))
+    db.flush()
     return hold
 
 
@@ -1042,6 +1058,22 @@ def shortage_side_effects(
                 ),
             )
             db.add(alert)
+            db.add(OperationalIncident(
+                incident_type="REPEATED_SHORTAGE",
+                severity="HIGH",
+                site_id=(db.get(Location, item.source_location_id).site_id if db.get(Location, item.source_location_id) else "DEMO"),
+                scope_type="BIN",
+                scope_value=item.source_location_id,
+                source_ref=alert.id,
+                details_json=json.dumps(
+                    {
+                        "product_id": item.product_id,
+                        "recent_30m": int(recent_count),
+                        "suggested_action": "CYCLE_COUNT",
+                    },
+                    separators=(",", ":"),
+                ),
+            ))
 
     existing_replenishment = db.scalar(
         select(ReplenishmentTask).where(
@@ -1370,6 +1402,7 @@ def clock_in_shift(
     )
     db.add(shift)
     set_worker_state(db, user_id, "AVAILABLE", reason="SHIFT_CLOCK_IN", force=True)
+    evaluate_guard_rules(db, site_id="DEMO")
     db.flush()
     return shift
 
@@ -1418,6 +1451,7 @@ def clock_out_shift(db: Session, *, user_id: str, clock_out_at: datetime | None 
         worked_minutes=shift.worked_minutes,
     ))
     set_worker_state(db, user_id, "OFFLINE", reason="SHIFT_CLOCK_OUT", force=True)
+    evaluate_guard_rules(db, site_id="DEMO")
     db.flush()
     return shift
 
