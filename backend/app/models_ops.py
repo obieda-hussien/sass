@@ -517,3 +517,18 @@ class AdminAuditEvent(Base):
     reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     request_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class PromotionRecord(Base):
+    __tablename__ = "promotion_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    from_role: Mapped[str] = mapped_column(String(40), index=True)
+    to_role: Mapped[str] = mapped_column(String(40), index=True)
+    reason: Mapped[str] = mapped_column(String(300))
+    old_base_salary_cents: Mapped[int] = mapped_column(Integer, default=0)
+    new_base_salary_cents: Mapped[int] = mapped_column(Integer, default=0)
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    approved_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
