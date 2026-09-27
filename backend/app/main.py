@@ -54,7 +54,27 @@ async def lifespan(app: FastAPI):
     yield
 
 
+class ApiPrefixMiddleware:
+    """Normalize the public /api gateway prefix before FastAPI routing."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in {"http", "websocket"}:
+            path = scope.get("path", "")
+            if path == "/api" or path.startswith("/api/"):
+                normalized = path[4:] or "/"
+                scope = dict(scope)
+                scope["path"] = normalized
+                raw_path = scope.get("raw_path")
+                if raw_path:
+                    scope["raw_path"] = normalized.encode("utf-8")
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(title="FulfillOS", version="0.2.0", lifespan=lifespan)
+app.add_middleware(ApiPrefixMiddleware)
 
 DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
 if DASHBOARD_DIR.exists():
