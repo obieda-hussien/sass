@@ -624,3 +624,61 @@ select option {
     text-align: center;
   }
 }
+
+
+.employeeCardActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.miniAction {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(142, 141, 229, 0.12);
+  color: #dfdeff;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+
+.managerPanel {
+  margin-top: 14px;
+}
+
+.managerForms {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.managerForm {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.02);
+}
+
+.managerForm h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.managerForm label {
+  display: grid;
+  gap: 6px;
+}
+
+.managerForm label > span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+@media (max-width: 1050px) {
+  .managerForms {
+    grid-template-columns: 1fr;
+  }
+}
