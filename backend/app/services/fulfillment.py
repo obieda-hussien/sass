@@ -139,7 +139,7 @@ def complete_delivery(db: Session, task: PickTask, user_id: str | None = None, d
         )
     task.status = TaskStatus.COMPLETED.value
     order.status = OrderStatus.COMPLETED.value
-    task.finished_at = datetime.now(timezone.utc)
+    task.finished_at = task.finished_at or datetime.now(timezone.utc)
     task.server_version += 1
     release_pick_lease(db, task, reason="ORDER_COMPLETED")
     audit(db, "ORDER_COMPLETED", "PICK_TASK", task.id, user_id=user_id, device_id=device_id)
