@@ -141,6 +141,7 @@ def ops_manager(
     user, device = who
     try:
         require_permission(db, user, "operations.manage")
+        db.commit()
     except GovernanceError as exc:
         raise HTTPException(403, {"code": exc.code, "message": str(exc)})
     return user, device
@@ -1557,6 +1558,7 @@ def permission_role_put(
     actor, _ = who
     try:
         require_permission(db, actor, "permissions.manage")
+        db.commit()
         with db.begin():
             row = set_role_permission(
                 db,
@@ -1580,6 +1582,7 @@ def permission_user_put(
     actor, _ = who
     try:
         require_permission(db, actor, "permissions.manage")
+        db.commit()
         with db.begin():
             row = set_user_permission(
                 db,
@@ -1641,6 +1644,7 @@ def shift_template_create(
     actor, _ = who
     try:
         require_permission(db, actor, "shifts.manage")
+        db.commit()
         with db.begin():
             row = create_shift_template(
                 db,
@@ -1708,6 +1712,7 @@ def shift_assignment_create(
     actor, _ = who
     try:
         require_permission(db, actor, "shifts.manage")
+        db.commit()
         with db.begin():
             row = assign_shift(
                 db,
@@ -1848,6 +1853,7 @@ def leave_review(
     actor, _ = who
     try:
         require_permission(db, actor, "shifts.manage")
+        db.commit()
         with db.begin():
             row = review_leave_request(
                 db,
@@ -1891,6 +1897,7 @@ def overtime_review(
     actor, _ = who
     try:
         require_permission(db, actor, "shifts.manage")
+        db.commit()
         with db.begin():
             row = review_overtime_request(
                 db,
@@ -1937,6 +1944,7 @@ def replenishment_generate(
     actor, _ = who
     try:
         require_permission(db, actor, "replenishment.manage")
+        db.commit()
         with db.begin():
             rows = generate_replenishment_candidates(
                 db,
@@ -1967,6 +1975,7 @@ def replenishment_assign(
     actor, _ = who
     try:
         require_permission(db, actor, "replenishment.manage")
+        db.commit()
         with db.begin():
             task = db.get(ReplenishmentTask, task_id)
             if not task:
@@ -1993,6 +2002,7 @@ def replenishment_claim(
     user, device = who
     try:
         require_permission(db, user, "replenishment.execute")
+        db.commit()
         with db.begin():
             task = db.get(ReplenishmentTask, task_id)
             if not task:
@@ -2014,6 +2024,7 @@ def replenishment_source(
     user, device = who
     try:
         require_permission(db, user, "replenishment.execute")
+        db.commit()
         with db.begin():
             task = db.get(ReplenishmentTask, task_id)
             if not task:
@@ -2041,6 +2052,7 @@ def replenishment_item(
     user, device = who
     try:
         require_permission(db, user, "replenishment.execute")
+        db.commit()
         with db.begin():
             task = db.get(ReplenishmentTask, task_id)
             if not task:
@@ -2068,6 +2080,7 @@ def replenishment_destination(
     user, device = who
     try:
         require_permission(db, user, "replenishment.execute")
+        db.commit()
         with db.begin():
             task = db.get(ReplenishmentTask, task_id)
             if not task:
@@ -2095,6 +2108,7 @@ def replenishment_complete(
     user, device = who
     try:
         require_permission(db, user, "replenishment.execute")
+        db.commit()
         with db.begin():
             task = db.get(ReplenishmentTask, task_id)
             if not task:
@@ -2122,6 +2136,7 @@ def replenishment_cancel(
     actor, _ = who
     try:
         require_permission(db, actor, "replenishment.manage")
+        db.commit()
         with db.begin():
             task = db.get(ReplenishmentTask, task_id)
             if not task:
