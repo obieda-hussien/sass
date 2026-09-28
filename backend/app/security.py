@@ -79,7 +79,7 @@ def refresh_session(db: Session, refresh_token: str, device_id: str) -> tuple[st
         return None
     user = db.get(User, record.user_id)
     device = db.get(Device, device_id)
-    if not user or not device or not device.trusted:
+    if not user or not user.active or user.deleted_at is not None or not device or not device.trusted:
         return None
     record.revoked = True
     return issue_session(db, user, device)
