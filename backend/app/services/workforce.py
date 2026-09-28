@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -113,7 +114,10 @@ def create_employee(db: Session, payload: Any) -> tuple[User, str | None]:
         must_change_password=True,
     )
     db.add(user)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise WorkforceError("Username already exists", "USERNAME_EXISTS") from exc
 
     email = payload.email.strip().lower() if payload.email else None
     if email and db.scalar(select(EmployeeProfile).where(EmployeeProfile.email == email)):
@@ -167,8 +171,11 @@ def update_username(db: Session, user: User, username: str) -> tuple[str, str]:
         raise WorkforceError("Username already exists", "USERNAME_EXISTS")
     old = user.username
     user.username = value
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise WorkforceError("Username already exists", "USERNAME_EXISTS") from exc
     revoke_user_sessions(db, user.id)
-    db.flush()
     return old, value
 
 
