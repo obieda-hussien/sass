@@ -7,6 +7,8 @@ import {
   getAvailabilityHolds,
   getDispatchWorkers,
   getOperationalPerformance,
+  getReplenishmentQueue,
+  generateReplenishment,
   getShipments,
   getSlottingSuggestions,
   managerLogin,
@@ -16,6 +18,7 @@ import {
   type DispatchWorker,
   type OrderSearchResult,
   type PerformanceRow,
+  type ReplenishmentTask,
 } from "../../lib/api";
 
 const domains = ["AMBIENT", "CHILLED", "FROZEN", "PRODUCE", "HAZ", "HRV"];
@@ -41,6 +44,7 @@ export default function OperationsPage() {
   const [performance, setPerformance] = useState<PerformanceRow[]>([]);
   const [slotting, setSlotting] = useState<Array<Record<string, any>>>([]);
   const [shipments, setShipments] = useState<Array<Record<string, any>>>([]);
+  const [replenishment, setReplenishment] = useState<ReplenishmentTask[]>([]);
   const [query, setQuery] = useState("");
   const [fromAt, setFromAt] = useState("");
   const [toAt, setToAt] = useState("");
@@ -65,18 +69,20 @@ export default function OperationsPage() {
   async function refresh(activeToken = token) {
     if (!activeToken) return;
     try {
-      const [workerData, holdData, perfData, slotData, shipmentData] = await Promise.all([
+      const [workerData, holdData, perfData, slotData, shipmentData, replenishmentData] = await Promise.all([
         getDispatchWorkers(activeToken, selectedTask || undefined),
         getAvailabilityHolds(activeToken),
         getOperationalPerformance(activeToken),
         getSlottingSuggestions(activeToken, 30),
         getShipments(activeToken),
+        getReplenishmentQueue(activeToken),
       ]);
       setWorkers(workerData.workers);
       setHolds(holdData.holds);
       setPerformance(perfData.rows);
       setSlotting(slotData.suggestions);
       setShipments(shipmentData.shipments);
+      setReplenishment(replenishmentData.tasks);
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not refresh operations");
@@ -173,6 +179,26 @@ export default function OperationsPage() {
     }
   }
 
+  async function generateReplenishmentNow() {
+    if (!token) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await generateReplenishment(token);
+      setNotice(
+        result.created > 0
+          ? `Generated ${result.created} replenishment task(s).`
+          : "No new replenishment needed at the current threshold.",
+      );
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not generate replenishment");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function assign(taskId: string, worker: DispatchWorker) {
     if (!token || !worker.dispatchable) return;
     setBusy(true);
@@ -224,9 +250,9 @@ export default function OperationsPage() {
       <header className="peopleHeader">
         <div>
           <div className="peopleTopline"><a href="/">← Control Tower</a><a href="/people">People & Payroll</a></div>
-          <p className="eyebrow">FULFILLOS · OPERATIONS V0.3</p>
+          <p className="eyebrow">FULFILLOS · OPERATIONS V0.5</p>
           <h1 className="peopleTitle">Operations Console</h1>
-          <p className="subtitle">One picker, one active order. Server-owned claims. Zone-aware inventory and receiving workflows.</p>
+          <p className="subtitle">Pick the job from the navigation below. Live dispatch, order search, area controls, replenishment and inbound are separated into clear sections.</p>
         </div>
         <div className="peopleActions">
           <button onClick={() => void refresh()} disabled={busy}>Refresh</button>
@@ -240,13 +266,22 @@ export default function OperationsPage() {
       {notice && <section className="noticeBox">{notice}</section>}
       {error && <section className="alert">{error}</section>}
 
+      <nav className="sectionJumpNav" aria-label="Operations sections">
+        <a href="#dispatch">Live dispatch</a>
+        <a href="#orders">Orders & SPOO</a>
+        <a href="#availability">Availability</a>
+        <a href="#replenishment">Replenishment</a>
+        <a href="#inbound">Inbound</a>
+        <a href="#insights">Insights</a>
+      </nav>
+
       <section className="headlineGrid opsHeadline">
         <article className="heroCard"><span>Available pickers</span><strong>{availableWorkers.length}</strong><small>{workers.length} picker accounts visible</small></article>
         <article className="heroCard"><span>Orders / units</span><strong>{ordersToday} / {unitsToday}</strong><small>Selected performance window</small></article>
         <article className="heroCard critical"><span>Active zone holds</span><strong>{activeHolds.length}</strong><small>Physical stock is kept separate</small></article>
       </section>
 
-      <section className="panel opsSection">
+      <section id="dispatch" className="panel opsSection">
         <div className="panelHeading">
           <div><p className="eyebrow">LIVE DISPATCH</p><h2>Picker availability</h2></div>
           {selectedTask && <span className="chip">Assigning task {selectedTask.slice(0, 8)}</span>}
@@ -275,7 +310,7 @@ export default function OperationsPage() {
         </div>
       </section>
 
-      <section className="panelGrid operationsGrid">
+      <section id="availability" className="panelGrid operationsGrid">
         <article className="panel">
           <div className="panelHeading"><div><p className="eyebrow">FULFILLMENT AVAILABILITY</p><h2>Pause an area</h2></div></div>
           <div className="domainChips">
@@ -308,7 +343,7 @@ export default function OperationsPage() {
         </article>
       </section>
 
-      <section className="panel opsSection">
+      <section id="orders" className="panel opsSection">
         <div className="panelHeading"><div><p className="eyebrow">ORDER EXPLORER</p><h2>Order ID · SPOO · picker · date/time</h2></div></div>
         <form className="searchBar" onSubmit={runSearch}>
           <input placeholder="Order ID, SPOO / last 4, or username" value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -332,7 +367,7 @@ export default function OperationsPage() {
         </div>
       </section>
 
-      <section className="panelGrid operationsGrid">
+      <section id="insights" className="panelGrid operationsGrid">
         <article className="panel">
           <div className="panelHeading"><div><p className="eyebrow">PICKER METRICS</p><h2>Operational performance</h2></div></div>
           <div className="tableWrap"><table><thead><tr><th>Picker</th><th>Orders</th><th>Items</th><th>Bags</th><th>Late SLAM</th><th>Avg pick</th></tr></thead><tbody>{performance.map((row) => <tr key={row.user_id}><td>{row.full_name}</td><td>{row.orders}</td><td>{row.items}</td><td>{row.bags}</td><td>{row.late_slam} ({row.late_slam_rate}%)</td><td>{minutesLabel(row.avg_pick_seconds)}</td></tr>)}</tbody></table></div>
@@ -346,7 +381,40 @@ export default function OperationsPage() {
         </article>
       </section>
 
-      <section className="panel opsSection">
+      <section id="replenishment" className="panel opsSection">
+        <div className="panelHeading">
+          <div>
+            <p className="eyebrow">REPLENISHMENT</p>
+            <h2>Pick-face restock queue</h2>
+          </div>
+          <div className="employeeCardActions">
+            <span className="chip">{replenishment.length} active</span>
+            <button className="miniAction" onClick={() => void generateReplenishmentNow()} disabled={busy}>
+              Generate candidates
+            </button>
+          </div>
+        </div>
+        <p className="sectionHelp">
+          Use this when pick faces are running low. The generator creates tasks only; stock moves only after a worker scans source, item and destination on the PDA.
+        </p>
+        <div className="replenishmentGrid">
+          {replenishment.length === 0 ? (
+            <div className="empty compactEmpty"><span>✓</span><div><strong>No active replenishment tasks</strong><p>Generate candidates to scan low pick faces against reserve stock.</p></div></div>
+          ) : replenishment.map((task) => (
+            <div className="replenishmentRow" key={task.id}>
+              <div>
+                <strong>{task.title}</strong>
+                <small>{task.asin ?? task.product_id} · {task.trigger}</small>
+              </div>
+              <div><small>Move</small><strong>{task.qty} units</strong></div>
+              <div><small>Route</small><strong>{task.source_location_id} → {task.destination_location_id}</strong></div>
+              <div><small>Status</small><span className={`statePill state-${stateClass(task.status)}`}>{task.status}</span></div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section id="inbound" className="panel opsSection">
         <div className="panelHeading"><div><p className="eyebrow">INBOUND</p><h2>Shipment & stow pipeline</h2></div><span className="chip">{activeShipments.length} active</span></div>
         <div className="shipmentGrid">{activeShipments.map((shipment) => <article className="shipmentCard" key={String(shipment.id)}><div><strong>{String(shipment.label)}</strong><small>{String(shipment.shipment_type)} · {String(shipment.storage_domain)}</small></div><span className={`statePill state-${stateClass(String(shipment.status))}`}>{String(shipment.status)}</span><div className="shipmentStats"><span>Expected {Number(shipment.expected_units)}</span><span>Received {Number(shipment.received_units)}</span><span>Damaged {Number(shipment.damaged_units)}</span><span>Missing {Number(shipment.missing_units)}</span></div>{shipment.stow_overdue && <p className="blockReason">Stow target exceeded · {Number(shipment.elapsed_minutes)}m / {Number(shipment.target_stow_minutes)}m</p>}</article>)}</div>
       </section>
