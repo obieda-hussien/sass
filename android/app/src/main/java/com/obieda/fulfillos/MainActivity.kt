@@ -171,6 +171,7 @@ private fun FulfillApp(vm: AppViewModel) {
             ConnectionBanner(vm.connectivity, vm.message, vm.errorMessage, vm::clearError)
             when (vm.screen) {
                 AppScreen.HOME -> HomeScreen(vm)
+                AppScreen.ACTIVITY -> ActivityRecorderScreen(vm)
                 AppScreen.PICK -> PickScreen(vm)
                 AppScreen.INVENTORY -> InventoryScreen(vm)
                 AppScreen.UNPACK -> UnpackScreen(vm)
@@ -334,6 +335,26 @@ private fun HomeScreen(vm: AppViewModel) {
         Text("Device ${vm.session?.deviceId ?: ""}", style = MaterialTheme.typography.bodySmall)
         Text("Presence heartbeat: 5s • Waiting-order refresh: 3s", style = MaterialTheme.typography.bodySmall)
 
+        ElevatedCard(
+            onClick = vm::openActivityRecorder,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Record task / break", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text("Tell dispatch what you are actually doing so orders are not sent to you at the wrong time.")
+                    }
+                    AssistChip(onClick = {}, label = { Text(vm.workerState.replace("_", " ")) })
+                }
+                Text(
+                    if (vm.workerState == "AVAILABLE") "Available • waiting for orders"
+                    else "Recorded: ${vm.workerState.replace("_", " ")} • dispatch blocked",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Outbound Pick", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -385,6 +406,94 @@ private fun OperationModule(
         }
     }
 }
+
+@Composable
+private fun ActivityRecorderScreen(vm: AppViewModel) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = vm::goHome) { Text("Home") }
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = vm::refreshWorkerState, enabled = !vm.busy) { Text("Refresh state") }
+        }
+
+        Text("Record task", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("This state is sent to dispatch. Any non-AVAILABLE state blocks new pick orders.")
+
+        ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Current activity", style = MaterialTheme.typography.labelLarge)
+                Text(vm.workerState.replace("_", " "), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                if (vm.workerState != "AVAILABLE") {
+                    Button(
+                        onClick = vm::finishRecordedActivity,
+                        enabled = !vm.busy && vm.currentTask == null,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (vm.workerState == "BREAK") "End break & go available" else "Finish task & go available")
+                    }
+                }
+            }
+        }
+
+        if (vm.currentTask != null) {
+            ElevatedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Active order owns this picker", fontWeight = FontWeight.Bold)
+                    Text("Break and other recorded tasks are disabled until the order is completed or handed over.")
+                    Button(onClick = vm::openPick, modifier = Modifier.fillMaxWidth()) { Text("Return to order") }
+                }
+            }
+        } else {
+            OutlinedTextField(
+                value = vm.activityReasonInput,
+                onValueChange = { vm.activityReasonInput = it.take(120) },
+                label = { Text("Optional note / reason") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+
+            Text("Break", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = { vm.startBreak("REST") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) {
+                    Text("Start break")
+                }
+                OutlinedButton(onClick = { vm.startBreak("MEAL") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) {
+                    Text("Meal break")
+                }
+            }
+
+            Text("Recorded non-order work", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilledTonalButton(onClick = { vm.recordActivity("TRAINING", "TRAINING") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Training") }
+                FilledTonalButton(onClick = { vm.recordActivity("BIN_CHECK", "BIN_CHECK") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Bin check") }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilledTonalButton(onClick = { vm.recordActivity("EXPIRY_AUDIT", "EXPIRY_AUDIT") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Expiry audit") }
+                FilledTonalButton(onClick = { vm.recordActivity("VENDOR_REMOVAL", "VENDOR_REMOVAL") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Vendor removal") }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilledTonalButton(onClick = { vm.recordActivity("BOH_MOVE", "MANUAL_BOH_TASK") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("BOH task") }
+                FilledTonalButton(onClick = { vm.recordActivity("ENDING_SHIFT", "ENDING_SHIFT") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Ending shift") }
+            }
+
+            Text("Operational workflows", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("These open the real workflow; once work starts the backend records the matching worker state.", style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OperationModule("Receive", "Shipment + stow", vm::openReceive, Modifier.weight(1f))
+                OperationModule("Unpack", "Inbound / returns", vm::openUnpack, Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OperationModule("Cycle Count", "Physical count", vm::openCycleCount, Modifier.weight(1f))
+                OperationModule("Replenish", "Reserve → pick face", vm::openReplenishment, Modifier.weight(1f))
+            }
+            OperationModule("BOH Move", "Open scanner workflow", vm::openBoh, Modifier.fillMaxWidth())
+        }
+    }
+}
+
 
 @Composable
 private fun PickScreen(vm: AppViewModel) {
