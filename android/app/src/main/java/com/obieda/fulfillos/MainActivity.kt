@@ -145,12 +145,12 @@ private fun LoginScreen(vm: AppViewModel) {
                 )
                 OutlinedTextField(
                     value = vm.passwordInput,
-                    onValueChange = { vm.passwordInput = it },
-                    label = { Text("Password") },
+                    onValueChange = { value -> vm.passwordInput = value.filter(Char::isDigit).take(10) },
+                    label = { Text("6–10 digit PIN") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
                 )
                 TextButton(
                     onClick = vm::forgotPassword,
@@ -162,7 +162,7 @@ private fun LoginScreen(vm: AppViewModel) {
                 vm.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Button(
                     onClick = vm::login,
-                    enabled = !vm.busy && vm.usernameInput.isNotBlank() && vm.passwordInput.isNotBlank(),
+                    enabled = !vm.busy && vm.usernameInput.isNotBlank() && vm.passwordInput.length in 6..10,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (vm.busy) CircularProgressIndicator(Modifier.height(20.dp)) else Text("Sign in")
@@ -206,13 +206,14 @@ private fun HomeScreen(vm: AppViewModel) {
     ) {
         Text("Operations", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text("Device ${vm.session?.deviceId ?: ""}", style = MaterialTheme.typography.bodySmall)
+        Text("Presence heartbeat: 5s • Waiting-order refresh: 3s", style = MaterialTheme.typography.bodySmall)
 
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Outbound Pick", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("30-second offers, resumable tasks, bin validation, item barcode validation, durable scans.")
+                Text("Live queue auto-checks every 3 seconds. Offers appear automatically; only the first successful accept owns the order.")
                 Button(onClick = vm::openPick, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (vm.currentTask == null) "Find next order" else "Resume active order")
+                    Text(if (vm.currentTask == null) "Check now" else "Resume active order")
                 }
             }
         }
