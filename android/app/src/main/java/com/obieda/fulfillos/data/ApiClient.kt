@@ -158,6 +158,18 @@ class ApiClient {
     fun parseWorkerState(body: String): String =
         JSONObject(body).optString("state", "AVAILABLE")
 
+    fun startBreak(breakType: String = "REST", paid: Boolean = true): Result =
+        request(
+            "/ops/breaks/start",
+            JSONObject()
+                .put("break_type", breakType)
+                .put("paid", paid)
+                .toString(),
+        )
+
+    fun endBreak(): Result =
+        request("/ops/breaks/end", "{}")
+
     fun inventoryByProduct(asin: String): Result =
         request("/inventory/product/${encode(asin)}", null, "GET")
 
