@@ -939,7 +939,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 busy = false
                 if (updated != null) {
                     unpackSummary = updated
-                    message = "Unpack completed"
+                    workerState = "AVAILABLE"
+                    message = "Unpack completed • manifest verified"
+                    sendHeartbeat(forceConnectivity = "ONLINE", activityOverride = "WAITING_FOR_ORDER")
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
