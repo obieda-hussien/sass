@@ -315,19 +315,30 @@ private fun ConnectionBanner(
     error: String?,
     clearError: () -> Unit,
 ) {
-    val title = when (connectivity) {
-        ConnectivityState.ONLINE -> "Online • server ACK required"
-        ConnectivityState.OFFLINE -> "Offline • durable queue active"
-        ConnectivityState.RECONNECTING -> "Reconnecting • task state preserved"
+    val statusIcon = when (connectivity) {
+        ConnectivityState.ONLINE -> Icons.Filled.CloudDone
+        ConnectivityState.OFFLINE -> Icons.Filled.CloudOff
+        ConnectivityState.RECONNECTING -> Icons.Filled.Sync
+    }
+    val statusLabel = when (connectivity) {
+        ConnectivityState.ONLINE -> "Online"
+        ConnectivityState.OFFLINE -> "Offline"
+        ConnectivityState.RECONNECTING -> "Syncing"
     }
     Surface(tonalElevation = 1.dp) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp)) {
-            Text(title, fontWeight = FontWeight.SemiBold)
-            Text(message, style = MaterialTheme.typography.bodySmall)
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(statusIcon, contentDescription = statusLabel, modifier = Modifier.size(20.dp))
+            Column(Modifier.weight(1f)) {
+                Text(statusLabel, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text(error ?: message, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            }
             if (error != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = clearError) { Text("Dismiss") }
+                IconButton(onClick = clearError) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss error")
                 }
             }
         }
