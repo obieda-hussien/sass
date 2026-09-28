@@ -24,6 +24,7 @@ export default function RootLayout({
             <a href="/people#team">People</a>
             <a href="/people#schedule">Schedule</a>
             <a href="/people#payroll">Payroll</a>
+            <a href="/system">Admin & Audit</a>
           </div>
         </nav>
         {children}
