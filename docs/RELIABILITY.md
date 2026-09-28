@@ -351,3 +351,25 @@ On PostgreSQL the dispatcher selects work using `FOR UPDATE SKIP LOCKED`. Multip
 ## Failure: production latency/errors become invisible
 
 OpenTelemetry instruments FastAPI and SQLAlchemy. Request count, HTTP 5xx count and duration histograms are produced, and structured request logs include `X-Request-ID`. OTLP export can be enabled without changing business code.
+
+
+## Failure: website says OFFLINE while the PDA says waiting
+
+v0.5.1 binds presence to the Android foreground lifecycle.
+
+```text
+app resume
+→ immediate ONLINE heartbeat
+→ immediate active-task / offer poll
+→ website refresh <= 3s
+
+app pause/background
+→ best-effort OFFLINE heartbeat + APP_BACKGROUND
+→ if delivery fails, freshness TTL expires presence
+```
+
+The web UI treats `device_live=false` as authoritative and suppresses stale activity labels such as `WAITING_FOR_ORDER`.
+
+## Failure: worker must keep tapping Camera
+
+The ViewModel raises a one-shot camera request whenever a workflow enters a scan-required state. A manual close is respected until the workflow moves to another scan state. Camera, industrial scanner and manual test entry all continue through the same ScanBus validation path.
