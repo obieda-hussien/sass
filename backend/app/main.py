@@ -955,6 +955,18 @@ def admin_create_employee(req: EmployeeCreateRequest, who=Depends(manager_actor)
             payload = employee_payload(db, user)
             payload["temporary_password"] = generated_password
             payload["created_by"] = manager.id
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="CREATE_EMPLOYEE",
+                entity_type="USER",
+                entity_id=user.id,
+                new_value={
+                    "username": user.username,
+                    "role": user.role,
+                    "employee_code": payload["profile"]["employee_code"] if payload.get("profile") else None,
+                },
+            )
             return payload
     except WorkforceError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
@@ -969,14 +981,155 @@ def admin_employee_detail(user_id: str, period: str | None = None, who=Depends(m
 
 
 @app.patch("/admin/employees/{user_id}")
-def admin_update_employee(user_id: str, req: EmployeeUpdateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+def admin_update_employee(
+    user_id: str,
+    req: EmployeeUpdateRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
     try:
         with db.begin():
             user = db.get(User, user_id)
             if not user:
                 raise HTTPException(404, "Employee not found")
+            before = employee_payload(db, user)
             update_employee(db, user, req)
-            return employee_payload(db, user)
+            after = employee_payload(db, user)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="UPDATE_EMPLOYEE",
+                entity_type="USER",
+                entity_id=user.id,
+                old_value={"role": before["role"], "active": before["active"], "profile": before["profile"]},
+                new_value={"role": after["role"], "active": after["active"], "profile": after["profile"]},
+            )
+            return after
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.get("/admin/usernames/{username}/availability")
+def admin_username_availability(
+    username: str,
+    exclude_user_id: str | None = None,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    query = select(User).where(func.lower(User.username) == username.strip().lower())
+    if exclude_user_id:
+        query = query.where(User.id != exclude_user_id)
+    return {"username": username.strip(), "available": db.scalar(query) is None}
+
+
+@app.patch("/admin/employees/{user_id}/account")
+def admin_update_account(
+    user_id: str,
+    req: AdminAccountUpdateRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    try:
+        with db.begin():
+            user = db.get(User, user_id)
+            if not user:
+                raise HTTPException(404, "Employee not found")
+            old_username, new_username = update_username(db, user, req.username)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="CHANGE_USERNAME",
+                entity_type="USER",
+                entity_id=user.id,
+                field_name="username",
+                old_value=old_username,
+                new_value=new_username,
+            )
+            return {
+                "user_id": user.id,
+                "username": user.username,
+                "sessions_revoked": True,
+            }
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.post("/admin/employees/{user_id}/set-pin")
+def admin_set_employee_pin(
+    user_id: str,
+    req: AdminSetPinRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    if manager.id == user_id:
+        raise HTTPException(409, {"code": "USE_SELF_SERVICE_PIN_CHANGE", "message": "Use the normal change-PIN flow for your own account."})
+    try:
+        with db.begin():
+            user = db.get(User, user_id)
+            if not user or user.deleted_at is not None:
+                raise HTTPException(404, "Employee not found")
+            pin = set_employee_pin(
+                db,
+                user,
+                pin=req.password,
+                require_change_on_next_login=req.require_change_on_next_login,
+            )
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="ADMIN_SET_PIN",
+                entity_type="USER",
+                entity_id=user.id,
+                new_value={"must_change_password": user.must_change_password},
+                reason="Emergency/admin credential reset",
+            )
+            return {
+                "user_id": user.id,
+                "temporary_password": pin,
+                "must_change_password": user.must_change_password,
+                "sessions_revoked": True,
+                "warning": "Shown once. Share securely.",
+            }
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.delete("/admin/employees/{user_id}")
+def admin_delete_employee(
+    user_id: str,
+    req: AdminDeactivateUserRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    if manager.id == user_id:
+        raise HTTPException(409, {"code": "SELF_DELETE_FORBIDDEN", "message": "You cannot delete your own active manager account."})
+    try:
+        with db.begin():
+            user = db.get(User, user_id)
+            if not user:
+                raise HTTPException(404, "Employee not found")
+            before = {"active": user.active, "deleted_at": user.deleted_at, "username": user.username}
+            soft_delete_employee(db, user, reason=req.reason)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="DELETE_EMPLOYEE",
+                entity_type="USER",
+                entity_id=user.id,
+                old_value=before,
+                new_value={"active": user.active, "deleted_at": user.deleted_at},
+                reason=req.reason,
+            )
+            return {
+                "user_id": user.id,
+                "deleted": True,
+                "active": user.active,
+                "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None,
+            }
     except WorkforceError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
 
@@ -1003,6 +1156,16 @@ def admin_promote_employee(
                 new_base_salary_cents=req.new_base_salary_cents,
                 effective_at=req.effective_at,
             )
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="PROMOTE_EMPLOYEE",
+                entity_type="USER",
+                entity_id=user.id,
+                old_value={"role": record.from_role, "base_salary_cents": record.old_base_salary_cents},
+                new_value={"role": record.to_role, "base_salary_cents": record.new_base_salary_cents},
+                reason=record.reason,
+            )
             return {
                 "promotion_id": record.id,
                 "user_id": user.id,
@@ -1027,6 +1190,19 @@ def admin_add_attendance(user_id: str, req: AttendanceCreateRequest, who=Depends
             if not db.get(EmployeeProfile, user_id):
                 raise HTTPException(404, "Employee not found")
             entry = record_attendance(db, user_id, req, manager.id)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="ADD_ATTENDANCE",
+                entity_type="ATTENDANCE",
+                entity_id=entry.id,
+                new_value={
+                    "user_id": user_id,
+                    "late_minutes": entry.late_minutes,
+                    "overtime_minutes": entry.overtime_minutes,
+                    "status": entry.status,
+                },
+            )
             return {
                 "id": entry.id,
                 "late_minutes": entry.late_minutes,
@@ -1053,6 +1229,20 @@ def admin_add_pay_adjustment(user_id: str, req: PayAdjustmentCreateRequest, who=
         if not db.get(EmployeeProfile, user_id):
             raise HTTPException(404, "Employee not found")
         item = add_pay_adjustment(db, user_id, req, manager.id)
+        audit_event(
+            db,
+            actor_user_id=manager.id,
+            action="ADD_PAY_ADJUSTMENT",
+            entity_type="PAY_ADJUSTMENT",
+            entity_id=item.id,
+            new_value={
+                "user_id": user_id,
+                "kind": item.kind,
+                "amount_cents": item.amount_cents,
+                "approved": item.approved,
+            },
+            reason=item.reason,
+        )
         return {
             "id": item.id,
             "kind": item.kind,
@@ -1102,6 +1292,15 @@ def admin_issue_temporary_password(reset_id: str, req: TemporaryPasswordRequest,
             if not reset or reset.status != "PENDING":
                 raise HTTPException(404, "Pending reset request not found")
             password = issue_temporary_password(db, reset, manager.id, req.password)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="ISSUE_TEMPORARY_PIN",
+                entity_type="USER",
+                entity_id=reset.user_id,
+                new_value={"must_change_password": True},
+                reason="Password reset request resolved",
+            )
             return {
                 "resolved": True,
                 "temporary_password": password,
