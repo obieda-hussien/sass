@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -53,6 +54,8 @@ from .services.workforce import (
 )
 from .telemetry import emit as emit_telemetry, ping as telemetry_ping
 from .ops_router import router as ops_router
+from .observability import configure_observability
+from .services.eventing import outbox_dispatch_loop, outbox_health
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -67,7 +70,22 @@ async def lifespan(app: FastAPI):
                 seed_demo(db)
     finally:
         db.close()
-    yield
+
+    outbox_stop = asyncio.Event()
+    outbox_task = asyncio.create_task(
+        outbox_dispatch_loop(
+            outbox_stop,
+            interval_seconds=float(os.getenv("FULFILLOS_OUTBOX_INTERVAL_SECONDS", "2")),
+        )
+    )
+    try:
+        yield
+    finally:
+        outbox_stop.set()
+        try:
+            await asyncio.wait_for(outbox_task, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            outbox_task.cancel()
 
 
 class ApiPrefixMiddleware:
@@ -92,6 +110,7 @@ class ApiPrefixMiddleware:
 app = FastAPI(title="FulfillOS", version="0.5.0", lifespan=lifespan)
 app.add_middleware(ApiPrefixMiddleware)
 app.include_router(ops_router)
+configure_observability(app, engine)
 # Router-level fallback for hosting layers that preserve the public /api prefix
 # but adapt the ASGI app in a way that bypasses outer middleware path mutation.
 app.mount("/api", app, name="api-prefix-alias")
@@ -156,6 +175,22 @@ def health():
         "version": "0.5.0",
         "database": database_status,
         "telemetry": telemetry_status,
+        "server_time": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/admin/system/health")
+def admin_system_health(
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    return {
+        "version": "0.5.0",
+        "database": "connected",
+        "telemetry": "connected" if telemetry_ping() else "disabled_or_unavailable",
+        "outbox": outbox_health(db),
+        "otel_exporter_configured": bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()),
+        "incident_webhook_configured": bool(os.getenv("FULFILLOS_INCIDENT_WEBHOOK_URL", "").strip()),
         "server_time": datetime.now(timezone.utc).isoformat(),
     }
 
