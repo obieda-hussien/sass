@@ -23,7 +23,14 @@ def product(db, asin):
 def test_unpack_enforces_temperature_and_boh_compatibility(db):
     user, device = actor(db)
     chilled = product(db, "DEMO-CHILLED-001")
-    session = start_unpack(db, "CHILLED", user.id, device.id)
+    session = start_unpack(
+        db,
+        "CHILLED",
+        user.id,
+        device.id,
+        source_ref="TEST-BAG-CHILLED",
+        expected_items=[{"product_id": chilled.id, "expected_qty": 2}],
+    )
     db.commit()
     session = db.get(type(session), session.id)
     result = scan_unpack(db, session, "unpack-1", chilled.id, 2)
@@ -44,18 +51,48 @@ def test_unpack_enforces_temperature_and_boh_compatibility(db):
     assert move["destination_qty"] >= 2
 
 
-def test_unpack_rejects_wrong_temperature(db):
+def test_unpack_rejects_unexpected_item_and_incomplete_close(db):
     user, device = actor(db)
+    ambient = product(db, "DEMO-AMBIENT-001")
     frozen = product(db, "DEMO-FROZEN-001")
-    session = start_unpack(db, "AMBIENT", user.id, device.id)
+    session = start_unpack(
+        db,
+        "AMBIENT",
+        user.id,
+        device.id,
+        source_ref="TEST-BAG-AMBIENT",
+        expected_items=[{"product_id": ambient.id, "expected_qty": 2}],
+    )
+    db.commit()
+    session = db.get(type(session), session.id)
+
+    try:
+        scan_unpack(db, session, "wrong-item", frozen.id, 1)
+        assert False, "expected unexpected-item rejection"
+    except OperationError as e:
+        db.rollback()
+        assert e.code == "UNEXPECTED_UNPACK_ITEM"
+
+    session = db.get(type(session), session.id)
+    scan_unpack(db, session, "ambient-1", ambient.id, 1)
     db.commit()
     session = db.get(type(session), session.id)
     try:
-        scan_unpack(db, session, "wrong-temp", frozen.id, 1)
-        assert False, "expected temperature mismatch"
+        complete_unpack(db, session)
+        assert False, "expected incomplete manifest rejection"
     except OperationError as e:
         db.rollback()
-        assert e.code == "TEMPERATURE_MISMATCH"
+        assert e.code == "UNPACK_INCOMPLETE"
+
+    session = db.get(type(session), session.id)
+    scan_unpack(db, session, "ambient-2", ambient.id, 1)
+    db.commit()
+    session = db.get(type(session), session.id)
+    summary = complete_unpack(db, session)
+    db.commit()
+    assert summary["status"] == "COMPLETED"
+    assert summary["verified_units"] == 2
+    assert summary["remaining_units"] == 0
 
 
 def test_damage_moves_inventory_out_of_sellable_location(db):
@@ -109,7 +146,15 @@ def test_cycle_count_adjustment_is_auditable_inventory_movement(db):
 
 def test_unpack_start_is_retry_safe_and_resumable(db):
     user, device = actor(db)
-    first = start_unpack(db, "AMBIENT", user.id, device.id)
+    ambient = product(db, "DEMO-AMBIENT-001")
+    first = start_unpack(
+        db,
+        "AMBIENT",
+        user.id,
+        device.id,
+        source_ref="TEST-RESUME-BAG",
+        expected_items=[{"product_id": ambient.id, "expected_qty": 1}],
+    )
     db.commit()
     first_id = first.id
 
@@ -122,6 +167,9 @@ def test_unpack_start_is_retry_safe_and_resumable(db):
     assert resumed.id == first_id
     assert resumed.tote_location_id == "TSCRET001"
 
+    scan_unpack(db, resumed, "resume-item", ambient.id, 1)
+    db.commit()
+    resumed = db.get(type(resumed), resumed.id)
     complete_unpack(db, resumed)
     db.commit()
     third = start_unpack(db, "AMBIENT", user.id, device.id)
