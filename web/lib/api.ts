@@ -134,7 +134,7 @@ export async function managerLogin(username: string, password: string) {
       username,
       password,
       device_id: "WEB-CONTROL-TOWER",
-      app_version: "web-0.2.1",
+      app_version: "web-0.5.0",
     }),
   });
 }
