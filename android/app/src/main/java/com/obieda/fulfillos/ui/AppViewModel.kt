@@ -10,8 +10,18 @@ import com.obieda.fulfillos.BuildConfig
 import com.obieda.fulfillos.data.ApiClient
 import com.obieda.fulfillos.data.AppGraph
 import com.obieda.fulfillos.data.PickSyncResult
+import com.obieda.fulfillos.data.OperationSyncResult
 import com.obieda.fulfillos.data.ScanBus
 import com.obieda.fulfillos.domain.AppScreen
+import com.obieda.fulfillos.domain.UnpackSummary
+import com.obieda.fulfillos.domain.ShipmentSummary
+import com.obieda.fulfillos.domain.ReplenishmentSummary
+import com.obieda.fulfillos.domain.ReplenishmentScanPhase
+import com.obieda.fulfillos.domain.RecoverySummary
+import com.obieda.fulfillos.domain.PendingOperationEvent
+import com.obieda.fulfillos.domain.OperationScanPhase
+import com.obieda.fulfillos.domain.CycleCountEntrySummary
+import com.obieda.fulfillos.domain.BarcodeProduct
 import com.obieda.fulfillos.domain.ConnectivityState
 import com.obieda.fulfillos.domain.ClosedBagSummary
 import com.obieda.fulfillos.domain.OrderCompletionSummary
@@ -20,6 +30,7 @@ import com.obieda.fulfillos.domain.LocationParser
 import com.obieda.fulfillos.domain.PickScanPhase
 import com.obieda.fulfillos.domain.SessionInfo
 import com.obieda.fulfillos.domain.TaskSnapshot
+import java.util.UUID
 import java.util.concurrent.Executors
 
 class AppViewModel(private val graph: AppGraph) : ViewModel() {
@@ -65,6 +76,51 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         private set
     var inventoryLoading by mutableStateOf(false)
         private set
+
+    var operationSourceInput by mutableStateOf("")
+    var operationDestinationInput by mutableStateOf("")
+    var operationQtyInput by mutableStateOf("1")
+    var operationReasonInput by mutableStateOf("DAMAGED")
+    var operationProduct by mutableStateOf<BarcodeProduct?>(null)
+        private set
+    var operationScanPhase by mutableStateOf(OperationScanPhase.SOURCE)
+        private set
+
+    var unpackTemperature by mutableStateOf("AMBIENT")
+    var unpackSummary by mutableStateOf<UnpackSummary?>(null)
+        private set
+
+    var cycleCountSessionId by mutableStateOf<String?>(null)
+        private set
+    var cycleCountLocation by mutableStateOf("")
+    var cycleCountProduct by mutableStateOf<BarcodeProduct?>(null)
+        private set
+    var cycleCountQtyInput by mutableStateOf("0")
+    var cycleCountEntries by mutableStateOf<List<CycleCountEntrySummary>>(emptyList())
+        private set
+
+    var recoveryTaskIdInput by mutableStateOf("")
+    var recoverySummary by mutableStateOf<RecoverySummary?>(null)
+        private set
+
+    var shipments by mutableStateOf<List<ShipmentSummary>>(emptyList())
+        private set
+    var selectedShipment by mutableStateOf<ShipmentSummary?>(null)
+        private set
+    var receiveProduct by mutableStateOf<BarcodeProduct?>(null)
+        private set
+    var receiveGoodQtyInput by mutableStateOf("1")
+    var receiveDamagedQtyInput by mutableStateOf("0")
+    var receiveLotInput by mutableStateOf("")
+    var receiveExpiryInput by mutableStateOf("")
+
+    var replenishmentTasks by mutableStateOf<List<ReplenishmentSummary>>(emptyList())
+        private set
+    var activeReplenishment by mutableStateOf<ReplenishmentSummary?>(null)
+        private set
+    var replenishmentPhase by mutableStateOf(ReplenishmentScanPhase.SOURCE)
+        private set
+    var replenishmentQtyInput by mutableStateOf("1")
 
     private var submittingItemId: String? = null
     private var lastLocationId: String? = null
