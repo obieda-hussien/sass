@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import com.obieda.fulfillos.BuildConfig
 import com.obieda.fulfillos.data.ApiClient
 import com.obieda.fulfillos.data.AppGraph
 import com.obieda.fulfillos.data.PickSyncResult
@@ -64,6 +65,25 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         private set
 
     private var submittingItemId: String? = null
+    private var lastLocationId: String? = null
+    private val heartbeatIntervalMs = 5_000L
+    private val offerPollIntervalMs = 3_000L
+
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            if (authenticated) sendHeartbeat()
+            main.postDelayed(this, heartbeatIntervalMs)
+        }
+    }
+
+    private val offerPollRunnable = object : Runnable {
+        override fun run() {
+            if (authenticated && connectivity == ConnectivityState.ONLINE && !busy) {
+                pollWaitingOrders()
+            }
+            main.postDelayed(this, offerPollIntervalMs)
+        }
+    }
 
     private val scannerListener: (String) -> Unit = { value ->
         ui { onScan(value) }
@@ -83,6 +103,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             }
         }
         ScanBus.subscribe(scannerListener)
+        main.post(heartbeatRunnable)
+        main.postDelayed(offerPollRunnable, 1_000L)
         recoverSession()
     }
 
