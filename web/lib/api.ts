@@ -515,3 +515,132 @@ export async function updatePayrollPolicy(
     token,
   );
 }
+
+
+export type ReplenishmentTask = {
+  id: string;
+  product_id: string;
+  asin: string | null;
+  title: string;
+  source_location_id: string;
+  destination_location_id: string;
+  qty: number;
+  actual_qty: number;
+  status: string;
+  trigger: string;
+  priority: number;
+  assigned_user_id: string | null;
+  source_available_qty: number;
+  destination_on_hand: number;
+  created_at: string;
+};
+
+export async function getReplenishmentQueue(token: string) {
+  return jsonRequest<{ tasks: ReplenishmentTask[] }>(
+    "/ops/replenishment/queue",
+    {},
+    token,
+  );
+}
+
+export async function generateReplenishment(
+  token: string,
+  lowStockThreshold = 3,
+  targetQty = 12,
+) {
+  return jsonRequest<{ created: number; tasks: ReplenishmentTask[] }>(
+    "/ops/replenishment/generate",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        low_stock_threshold: lowStockThreshold,
+        target_qty: targetQty,
+        max_new_tasks: 100,
+      }),
+    },
+    token,
+  );
+}
+
+export type ShiftTemplate = {
+  id: string;
+  site_id: string;
+  name: string;
+  start_minute: number;
+  end_minute: number;
+  timezone_name: string;
+  break_minutes: number;
+  grace_minutes: number;
+  active: boolean;
+};
+
+export type ShiftAssignment = {
+  id: string;
+  user_id: string;
+  username: string | null;
+  shift_date: string;
+  template_id: string | null;
+  template_name: string | null;
+  scheduled_start_at: string;
+  scheduled_end_at: string;
+  status: string;
+  notes: string | null;
+};
+
+export async function getShiftTemplates(token: string) {
+  return jsonRequest<{ templates: ShiftTemplate[] }>(
+    "/ops/shifts/templates",
+    {},
+    token,
+  );
+}
+
+export async function createShiftTemplate(
+  token: string,
+  payload: {
+    site_id?: string;
+    name: string;
+    start_minute: number;
+    end_minute: number;
+    timezone_name?: string;
+    break_minutes: number;
+    grace_minutes: number;
+  },
+) {
+  return jsonRequest<ShiftTemplate>(
+    "/ops/shifts/templates",
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export async function getRoster(
+  token: string,
+  from: string,
+  to: string,
+  userId?: string,
+) {
+  const q = new URLSearchParams({ from, to });
+  if (userId) q.set("user_id", userId);
+  return jsonRequest<{ assignments: ShiftAssignment[] }>(
+    `/ops/shifts/roster?${q.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function assignShift(
+  token: string,
+  payload: {
+    user_id: string;
+    shift_template_id: string;
+    shift_date: string;
+    notes?: string | null;
+  },
+) {
+  return jsonRequest<ShiftAssignment>(
+    "/ops/shifts/assignments",
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
