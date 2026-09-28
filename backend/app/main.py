@@ -1249,11 +1249,33 @@ def admin_add_attendance(user_id: str, req: AttendanceCreateRequest, who=Depends
 
 
 @app.post("/admin/employees/{user_id}/performance-events", status_code=201)
-def admin_add_performance_event(user_id: str, req: PerformanceEventCreateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+def admin_add_performance_event(
+    user_id: str,
+    req: PerformanceEventCreateRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
     with db.begin():
         if not db.get(EmployeeProfile, user_id):
             raise HTTPException(404, "Employee not found")
         event = record_performance(db, user_id, req)
+        audit_event(
+            db,
+            actor_user_id=manager.id,
+            action="ADD_PERFORMANCE_EVENT",
+            entity_type="PERFORMANCE_EVENT",
+            entity_id=event.id,
+            new_value={
+                "user_id": user_id,
+                "event_type": event.event_type,
+                "order_id": event.order_id,
+                "task_id": event.task_id,
+                "minutes": event.minutes,
+                "source": event.source,
+            },
+            reason=event.notes,
+        )
         return {"id": event.id, "event_type": event.event_type, "occurred_at": event.occurred_at.isoformat()}
 
 
