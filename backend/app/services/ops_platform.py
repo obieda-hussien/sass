@@ -56,6 +56,8 @@ from .ops_optimization import (
 )
 
 
+PDA_PRESENCE_TTL_SECONDS = 20
+
 ACTIVE_PICK_STATES = {
     TaskStatus.OFFERED.value,
     TaskStatus.ACCEPTED.value,
@@ -243,6 +245,22 @@ def worker_dispatch_status(db: Session, user: User, task: PickTask | None = None
         reasons.append("USER_INACTIVE")
     if user.role.upper() not in PICKER_ROLES:
         reasons.append("NOT_PICKER")
+
+    latest_device = db.scalar(
+        select(Device)
+        .where(Device.last_user_id == user.id)
+        .order_by(Device.last_seen_at.desc())
+        .limit(1)
+    )
+    live_cutoff = now_utc() - timedelta(seconds=PDA_PRESENCE_TTL_SECONDS)
+    if latest_device is None or latest_device.last_seen_at is None:
+        reasons.append("PDA_NOT_CONNECTED")
+    else:
+        last_seen = latest_device.last_seen_at
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        if latest_device.status != "ONLINE" or last_seen < live_cutoff:
+            reasons.append("PDA_OFFLINE_OR_STALE")
     if state and state.state != "AVAILABLE":
         # A direct assignment reserves the worker for that exact task.
         if not (
@@ -275,6 +293,9 @@ def worker_dispatch_status(db: Session, user: User, task: PickTask | None = None
         "qualifications": sorted(worker_qualifications(db, user.id)),
         "active_task_id": active_task.id if active_task else None,
         "estimated_walk_to_first_item_m": estimated_walk,
+        "device_id": latest_device.id if latest_device else None,
+        "device_last_seen_at": latest_device.last_seen_at.isoformat() if latest_device and latest_device.last_seen_at else None,
+        "device_live": not any(reason in {"PDA_NOT_CONNECTED", "PDA_OFFLINE_OR_STALE"} for reason in reasons),
     }
 
 
