@@ -1035,7 +1035,7 @@ def admin_issue_temporary_password(reset_id: str, req: TemporaryPasswordRequest,
             return {
                 "resolved": True,
                 "temporary_password": password,
-                "warning": "Shown once. Give it to the employee securely and ask them to change it after login.",
+                "warning": "Shown once. Temporary PINs are six digits; give it to the employee securely and ask them to change it after login.",
             }
     except WorkforceError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
