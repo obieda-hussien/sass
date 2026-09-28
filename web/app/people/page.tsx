@@ -17,6 +17,10 @@ import {
   getWebSession,
   managerLogout,
   promoteEmployee,
+  updateEmployeeAccount,
+  setEmployeePin,
+  deleteEmployee,
+  usernameAvailability,
   type Employee,
   type PasswordResetItem,
   type ShiftAssignment,
@@ -125,6 +129,13 @@ export default function PeoplePage() {
     new_base_salary: "",
     reason: "",
   });
+  const [accountForm, setAccountForm] = useState({
+    username: "",
+    pin: "",
+    require_change: true,
+    delete_reason: "",
+  });
+  const [usernameHint, setUsernameHint] = useState("");
   const [shiftTemplateForm, setShiftTemplateForm] = useState({
     name: "Middle",
     start: "14:00",
@@ -276,6 +287,99 @@ export default function PeoplePage() {
       setPromotionForm((current) => ({...current, to_role: promotionTargets[0]}));
     }
   }, [selectedEmployee, promotionTargets, promotionForm.to_role]);
+
+  useEffect(() => {
+    if (!selectedEmployee) return;
+    setAccountForm((current) => ({
+      ...current,
+      username: selectedEmployee.username,
+      pin: "",
+      delete_reason: "",
+    }));
+    setUsernameHint("");
+  }, [selectedEmployee?.user_id]);
+
+
+  async function checkUsername(username: string, excludeUserId?: string) {
+    if (!token || username.trim().length < 3) return false;
+    try {
+      const result = await usernameAvailability(token, username.trim(), excludeUserId);
+      setUsernameHint(result.available ? "Username is available" : "Username already exists");
+      return result.available;
+    } catch {
+      setUsernameHint("Could not verify username");
+      return false;
+    }
+  }
+
+  async function submitUsername(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    const username = accountForm.username.trim();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const available = await checkUsername(username, selectedEmployee.user_id);
+      if (!available && username.toLowerCase() !== selectedEmployee.username.toLowerCase()) {
+        throw new Error("Username already exists");
+      }
+      const result = await updateEmployeeAccount(token, selectedEmployee.user_id, username);
+      setNotice(`Username changed to @${result.username}. Existing PDA sessions were signed out.`);
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not change username");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitAdminPin(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await setEmployeePin(token, selectedEmployee.user_id, {
+        password: accountForm.pin || null,
+        require_change_on_next_login: accountForm.require_change,
+      });
+      setAccountForm((current) => ({...current, pin: ""}));
+      setNotice(
+        `New PIN for @${selectedEmployee.username}: ${result.temporary_password}` +
+          (result.must_change_password ? " · employee must change it at next PDA login" : ""),
+      );
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not set employee PIN");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitDeleteEmployee(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    const reason = accountForm.delete_reason.trim();
+    if (!reason) return;
+    if (!window.confirm(`Deactivate and delete access for ${selectedEmployee.profile?.full_name ?? selectedEmployee.username}? Historical orders/payroll will be preserved.`)) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await deleteEmployee(token, selectedEmployee.user_id, reason);
+      setNotice(`@${selectedEmployee.username} was deactivated. Historical records were preserved.`);
+      setSelectedId("");
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not deactivate employee");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submitAttendance(event: FormEvent) {
     event.preventDefault();
@@ -548,7 +652,16 @@ export default function PeoplePage() {
           <form className="employeeForm" onSubmit={submitEmployee}>
             <label><span>Full name</span><input required value={form.full_name} onChange={(e) => setForm({...form, full_name:e.target.value})} /></label>
             <label><span>Employee code</span><input required value={form.employee_code} onChange={(e) => setForm({...form, employee_code:e.target.value})} /></label>
-            <label><span>Username</span><input required value={form.username} onChange={(e) => setForm({...form, username:e.target.value})} /></label>
+            <label>
+              <span>Username</span>
+              <input
+                required
+                value={form.username}
+                onChange={(e) => { setForm({...form, username:e.target.value}); setUsernameHint(""); }}
+                onBlur={() => { if (form.username) void checkUsername(form.username); }}
+              />
+              {usernameHint && <small className={usernameHint.includes("exists") ? "fieldHint dangerText" : "fieldHint"}>{usernameHint}</small>}
+            </label>
             <label className="pinField">
               <span>Initial PIN <small>(6–10 digits; blank = random 6 digits)</small></span>
               <div className="inlineFieldAction">
@@ -689,7 +802,7 @@ export default function PeoplePage() {
                       Manage
                     </button>
                     <span className={item.active ? "employeeStatus active" : "employeeStatus"}>
-                      {item.active ? "Active" : "Inactive"}
+                      {item.deleted_at ? "Deleted" : item.must_change_password ? "PIN change required" : item.active ? "Active" : "Inactive"}
                     </span>
                   </div>
                 </div>
@@ -730,6 +843,60 @@ export default function PeoplePage() {
           </div>
 
           <div className="managerForms">
+            <form className="managerForm" onSubmit={submitUsername}>
+              <h3>Account & access</h3>
+              <p className="policyNote">Username changes are unique and revoke existing sessions. Operational history stays attached to the same employee ID.</p>
+              <label>
+                <span>Username</span>
+                <input
+                  required
+                  minLength={3}
+                  value={accountForm.username}
+                  onChange={(e) => { setAccountForm({...accountForm, username:e.target.value}); setUsernameHint(""); }}
+                  onBlur={() => { if (accountForm.username) void checkUsername(accountForm.username, selectedEmployee.user_id); }}
+                />
+                {usernameHint && <small className={usernameHint.includes("exists") ? "fieldHint dangerText" : "fieldHint"}>{usernameHint}</small>}
+              </label>
+              <button className="primaryButton" disabled={busy || selectedEmployee.deleted_at != null}>Change username</button>
+            </form>
+
+            <form className="managerForm" onSubmit={submitAdminPin}>
+              <h3>Emergency PIN reset</h3>
+              <label>
+                <span>New PIN <small>(blank = random 6 digits)</small></span>
+                <div className="inlineFieldAction">
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]{6,10}"
+                    minLength={6}
+                    maxLength={10}
+                    value={accountForm.pin}
+                    onChange={(e) => setAccountForm({...accountForm, pin:e.target.value.replace(/\D/g, "").slice(0, 10)})}
+                  />
+                  <button type="button" className="miniAction" onClick={() => setAccountForm({...accountForm, pin:generateSixDigitPin()})}>Generate 6-digit</button>
+                </div>
+              </label>
+              <label className="checkField">
+                <input
+                  type="checkbox"
+                  checked={accountForm.require_change}
+                  onChange={(e) => setAccountForm({...accountForm, require_change:e.target.checked})}
+                />
+                <span>Force employee to choose a personal PIN on next PDA login</span>
+              </label>
+              <button className="primaryButton" disabled={busy || selectedEmployee.deleted_at != null}>Set / reset PIN</button>
+            </form>
+
+            <form className="managerForm dangerPanel" onSubmit={submitDeleteEmployee}>
+              <h3>Delete user access</h3>
+              <p className="policyNote">This is a safe soft-delete: login, dispatch and sessions stop, but orders, attendance, payroll and audit history are preserved.</p>
+              <label><span>Reason</span><input required value={accountForm.delete_reason} onChange={(e) => setAccountForm({...accountForm, delete_reason:e.target.value})} /></label>
+              <button className="dangerButton" disabled={busy || selectedEmployee.deleted_at != null}>
+                {selectedEmployee.deleted_at ? "Already deleted" : "Delete user access"}
+              </button>
+            </form>
+
             <form className="managerForm" onSubmit={submitAttendance}>
               <h3>Attendance & overtime</h3>
               <label><span>Scheduled start</span><input type="datetime-local" required value={attendanceForm.scheduled_start_at} onChange={(e) => setAttendanceForm({...attendanceForm, scheduled_start_at:e.target.value})} /></label>
