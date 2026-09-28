@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
@@ -42,6 +42,7 @@ from .services.operations import (
 )
 from .services.sla import board_target_seconds, effective_elapsed_seconds
 from .services.fulfillment import FulfillmentError, complete_delivery, handoff_task, stage_task, start_pack_rack
+from .services.ops_platform import get_worker_state, update_device_telemetry
 from .services.workforce import (
     MANAGER_ROLES, WorkforceError, add_pay_adjustment, create_employee, employee_payload,
     issue_temporary_password, payroll_preview, promote_employee, record_attendance, record_performance,
@@ -221,13 +222,23 @@ def change_password(req: ChangePasswordRequest, who=Depends(actor), db: Session 
 def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(get_db)):
     user, device = who
     with db.begin():
+        now = datetime.now(timezone.utc)
         device = db.get(Device, device.id)
-        device.last_seen_at = datetime.now(timezone.utc)
+        device.last_seen_at = now
         device.last_user_id = user.id
-        device.status = req.connectivity
+        device.status = req.connectivity.strip().upper()
         device.app_version = req.app_version or device.app_version
+        update_device_telemetry(
+            db,
+            device.id,
+            battery_percent=req.battery_percent,
+            connectivity=device.status,
+            last_location_id=req.last_location_id,
+        )
         active = active_task_for_actor(db, user.id, device.id)
         current_task_id = active.id if active else None
+        worker_state = get_worker_state(db, user.id, create=True)
+        worker_state_name = worker_state.state if worker_state else "OFFLINE"
     mismatch = bool(req.current_task_id and req.current_task_id != current_task_id)
     emit_telemetry(
         "device_health",
@@ -239,6 +250,10 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
             "current_task_id": current_task_id,
             "client_reported_task_id": req.current_task_id,
             "task_mismatch": mismatch,
+            "worker_state": worker_state_name,
+            "activity": req.activity,
+            "battery_percent": req.battery_percent,
+            "last_location_id": req.last_location_id,
             "observed_at": datetime.now(timezone.utc),
         },
     )
@@ -248,6 +263,7 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
         "current_task_id": current_task_id,
         "client_reported_task_id": req.current_task_id,
         "task_mismatch": mismatch,
+        "worker_state": worker_state_name,
     }
 
 
@@ -838,7 +854,12 @@ def dashboard_summary(db: Session = Depends(get_db)):
             active.append(snap)
     return {
         "task_counts": counts,
-        "devices_online": db.scalar(select(func.count()).select_from(Device).where(Device.status == "ONLINE")) or 0,
+        "devices_online": db.scalar(
+            select(func.count()).select_from(Device).where(
+                Device.status == "ONLINE",
+                Device.last_seen_at >= datetime.now(timezone.utc) - timedelta(seconds=15),
+            )
+        ) or 0,
         "orders_recovery_required": db.scalar(select(func.count()).select_from(Order).where(Order.recovery_required == True)) or 0,  # noqa: E712
         "active_tasks": active,
     }
@@ -1069,12 +1090,21 @@ def control_tower_compat_summary(db: Session = Depends(get_db)):
         associate_states[state] += 1
 
     device_state_by_user: dict[str, str] = {}
+    live_cutoff = datetime.now(timezone.utc) - timedelta(seconds=15)
     for device in devices:
         if not device.last_user_id:
             continue
+        last_seen = device.last_seen_at
+        if last_seen and last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        fresh_online = (
+            device.status == "ONLINE"
+            and last_seen is not None
+            and last_seen >= live_cutoff
+        )
         current = device_state_by_user.get(device.last_user_id)
         if current != "ONLINE":
-            device_state_by_user[device.last_user_id] = "ONLINE" if device.status == "ONLINE" else "OFFLINE"
+            device_state_by_user[device.last_user_id] = "ONLINE" if fresh_online else "OFFLINE"
 
     for user_id, device_state in device_state_by_user.items():
         if user_id in active_by_user:
