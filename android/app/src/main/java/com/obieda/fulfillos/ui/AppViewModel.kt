@@ -1093,6 +1093,12 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         }
     }
 
+    fun submitScanValue(value: String) {
+        val normalized = value.trim()
+        if (normalized.isBlank()) return
+        onScan(normalized)
+    }
+
     fun clearError() {
         errorMessage = null
     }
