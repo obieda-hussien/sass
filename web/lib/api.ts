@@ -290,6 +290,7 @@ export type DispatchWorker = {
     battery_percent: number | null;
     connectivity: string | null;
     last_location_id: string | null;
+    activity: string | null;
     updated_at: string;
   } | null;
 };
