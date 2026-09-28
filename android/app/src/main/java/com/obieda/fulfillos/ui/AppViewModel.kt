@@ -1399,6 +1399,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             AppScreen.RECOVERY -> handleRecoveryScan(value)
             AppScreen.RECEIVE -> handleReceiveScan(value)
             AppScreen.REPLENISHMENT -> handleReplenishmentScan(value)
+            AppScreen.ACTIVITY -> message = "Scan ignored • Record Task uses buttons, not barcode scans"
             AppScreen.HOME -> message = "Scan received • open a tool to use it"
         }
     }
