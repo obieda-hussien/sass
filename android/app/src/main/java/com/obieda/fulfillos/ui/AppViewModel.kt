@@ -1444,10 +1444,10 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 kind = PendingOperationEvent.Kind.UNPACK_SCAN,
                 resourceId = unpack.sessionId,
                 productId = product.productId,
-                qty = operationQtyInput.toIntOrNull()?.coerceAtLeast(1) ?: 1,
+                qty = 1,
                 onResult = ::handleOperationSync,
             )
-            message = "Item recorded • reconciling manifest"
+            message = "1 unit recorded • reconciling manifest"
         }
     }
 
