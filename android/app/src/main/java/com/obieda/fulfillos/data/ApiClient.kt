@@ -59,6 +59,14 @@ class ApiClient {
             authorized = false,
         )
 
+    fun completeFirstLogin(newPin: String): Result =
+        request(
+            "/auth/complete-first-login",
+            JSONObject()
+                .put("new_password", newPin)
+                .toString(),
+        )
+
     fun heartbeat(
         currentTaskId: String?,
         appVersion: String,
@@ -236,6 +244,11 @@ class ApiClient {
         )
     }
 
+    fun parseSessionEnvelope(body: String): SessionInfo {
+        val root = JSONObject(body)
+        return parseSession(root.getJSONObject("session").toString())
+    }
+
     fun parseSession(body: String): SessionInfo {
         val o = JSONObject(body)
         return SessionInfo(
@@ -245,6 +258,7 @@ class ApiClient {
             username = o.getString("username"),
             role = o.getString("role"),
             deviceId = o.getString("device_id"),
+            mustChangePassword = o.optBoolean("must_change_password", false),
         )
     }
 
