@@ -251,3 +251,16 @@ class PromotionRequest(BaseModel):
     reason: str = Field(min_length=2, max_length=300)
     new_base_salary_cents: int | None = Field(default=None, ge=0)
     effective_at: datetime | None = None
+
+
+class AdminAccountUpdateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
+
+
+class AdminSetPinRequest(BaseModel):
+    password: str | None = Field(default=None, min_length=6, max_length=10, pattern=r"^\d{6,10}$")
+    require_change_on_next_login: bool = True
+
+
+class AdminDeactivateUserRequest(BaseModel):
+    reason: str = Field(min_length=2, max_length=240)
