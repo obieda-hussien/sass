@@ -1485,6 +1485,7 @@ def update_device_telemetry(
     battery_percent: int | None,
     connectivity: str | None,
     last_location_id: str | None,
+    activity: str | None = None,
 ) -> DeviceTelemetry:
     row = db.get(DeviceTelemetry, device_id)
     if row is None:
@@ -1496,6 +1497,8 @@ def update_device_telemetry(
         row.connectivity = connectivity.strip().upper()
     if last_location_id is not None:
         row.last_location_id = last_location_id.strip().upper()
+    if activity is not None:
+        row.activity = activity.strip().upper()[:80]
     row.updated_at = now_utc()
     db.flush()
     return row
