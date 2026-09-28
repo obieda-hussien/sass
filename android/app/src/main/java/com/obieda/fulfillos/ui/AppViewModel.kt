@@ -657,6 +657,442 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         }
     }
 
+    fun openUnpack() {
+        screen = AppScreen.UNPACK
+        errorMessage = null
+        startOrResumeUnpack(unpackTemperature)
+    }
+
+    fun startOrResumeUnpack(temperature: String = unpackTemperature) {
+        if (!authenticated || busy) return
+        unpackTemperature = temperature.uppercase()
+        busy = true
+        message = "Opening ${unpackTemperature.lowercase()} unpack…"
+        worker.execute {
+            var response = callWithRefresh { graph.api.getActiveUnpack(unpackTemperature) }
+            var summary = if (response.ok) runCatching { graph.api.parseActiveUnpack(response.body) }.getOrNull() else null
+            if (summary == null && response.code != 401) {
+                response = callWithRefresh { graph.api.startUnpack(unpackTemperature) }
+                if (response.ok) summary = runCatching { graph.api.parseUnpack(response.body) }.getOrNull()
+            }
+            ui {
+                busy = false
+                if (summary != null) {
+                    unpackSummary = summary
+                    message = "Unpack ${summary.toteLocationId} • scan item barcode"
+                } else if (response.code == 401) {
+                    expireSession()
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                    message = "Could not open unpack"
+                }
+            }
+        }
+    }
+
+    fun completeCurrentUnpack() {
+        val current = unpackSummary ?: return
+        if (busy) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.completeUnpack(current.sessionId) }
+            val updated = if (response.ok) runCatching { graph.api.parseUnpack(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (updated != null) {
+                    unpackSummary = updated
+                    message = "Unpack completed"
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun openBoh() {
+        screen = AppScreen.BOH
+        resetOperationScanner()
+        message = "BOH Move • scan source bin"
+    }
+
+    fun openDamage() {
+        screen = AppScreen.DAMAGE
+        resetOperationScanner()
+        message = "Damage • scan source bin"
+    }
+
+    fun openCycleCount() {
+        screen = AppScreen.CYCLE_COUNT
+        cycleCountSessionId = null
+        cycleCountLocation = ""
+        cycleCountProduct = null
+        cycleCountEntries = emptyList()
+        message = "Cycle Count • scan the bin to count"
+    }
+
+    fun startCycleCount(location: String = cycleCountLocation) {
+        val loc = canonicalLocation(location)
+        if (loc.isBlank() || busy) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.startCycleCount(loc) }
+            val root = if (response.ok) runCatching { org.json.JSONObject(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (root != null) {
+                    cycleCountSessionId = root.optString("session_id")
+                    cycleCountLocation = root.optString("location_id", loc)
+                    lastLocationId = cycleCountLocation
+                    message = "Cycle Count open • scan an item barcode"
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun submitCycleCountLine() {
+        val sessionId = cycleCountSessionId ?: return
+        val product = cycleCountProduct ?: return
+        val qty = cycleCountQtyInput.toIntOrNull()
+        if (qty == null || qty < 0 || busy) {
+            errorMessage = "Enter the physical counted quantity"
+            return
+        }
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.recordCycleCount(sessionId, product.productId, qty) }
+            val entry = if (response.ok) runCatching { graph.api.parseCycleCountEntry(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (entry != null) {
+                    cycleCountEntries = cycleCountEntries.filterNot { it.productId == entry.productId } + entry
+                    cycleCountProduct = null
+                    cycleCountQtyInput = "0"
+                    message = "Count saved • variance ${entry.variance} • scan next item"
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun applyCurrentCycleCount() {
+        val sessionId = cycleCountSessionId ?: return
+        if (busy) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.applyCycleCount(sessionId) }
+            ui {
+                busy = false
+                if (response.ok) {
+                    message = "Cycle Count applied • inventory reconciled"
+                    cycleCountSessionId = null
+                    cycleCountProduct = null
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun openRecovery() {
+        screen = AppScreen.RECOVERY
+        recoverySummary = null
+        errorMessage = null
+        message = "Recovery • enter or scan task ID"
+    }
+
+    fun loadRecovery(taskId: String = recoveryTaskIdInput) {
+        val id = taskId.trim()
+        if (id.isBlank() || busy) return
+        recoveryTaskIdInput = id
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.getRecovery(id) }
+            val summary = if (response.ok) runCatching { graph.api.parseRecovery(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (summary != null) {
+                    recoverySummary = summary
+                    message = if (summary.items.isEmpty()) "Recovery complete" else "Scan destination for ${summary.items.first().title}"
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun openReceive() {
+        screen = AppScreen.RECEIVE
+        receiveProduct = null
+        errorMessage = null
+        loadShipments()
+    }
+
+    fun loadShipments() {
+        if (busy) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.getShipments() }
+            val list = if (response.ok) runCatching { graph.api.parseShipments(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (list != null) {
+                    shipments = list.filter { it.status != "COMPLETED" && it.status != "CANCELLED" }
+                    selectedShipment = selectedShipment?.let { selected -> shipments.firstOrNull { it.id == selected.id } }
+                    message = if (shipments.isEmpty()) "No active inbound shipments" else "Choose a shipment to receive"
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun selectShipment(shipment: ShipmentSummary) {
+        if (busy) return
+        selectedShipment = shipment
+        receiveProduct = null
+        busy = true
+        message = "Opening ${shipment.label}…"
+        worker.execute {
+            val response = callWithRefresh { graph.api.openShipment(shipment.id) }
+            val updated = if (response.ok) runCatching {
+                val root = org.json.JSONObject(response.body)
+                graph.api.parseShipment(root.getJSONObject("shipment").toString())
+            }.getOrNull() else null
+            ui {
+                busy = false
+                if (updated != null) {
+                    selectedShipment = updated
+                    message = "Receiving ${updated.label} • scan item barcode"
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun submitReceiveLine() {
+        val shipment = selectedShipment ?: return
+        val product = receiveProduct ?: return
+        val good = receiveGoodQtyInput.toIntOrNull() ?: 0
+        val damaged = receiveDamagedQtyInput.toIntOrNull() ?: 0
+        if (good + damaged <= 0 || busy) {
+            errorMessage = "Enter received or damaged quantity"
+            return
+        }
+        busy = true
+        worker.execute {
+            val response = callWithRefresh {
+                graph.api.receiveShipmentLine(
+                    shipmentId = shipment.id,
+                    eventId = UUID.randomUUID().toString(),
+                    productId = product.productId,
+                    goodQty = good,
+                    damagedQty = damaged,
+                    lotCode = receiveLotInput.trim().ifBlank { null },
+                    expiresOn = receiveExpiryInput.trim().ifBlank { null },
+                )
+            }
+            ui {
+                busy = false
+                if (response.ok) {
+                    receiveProduct = null
+                    receiveGoodQtyInput = "1"
+                    receiveDamagedQtyInput = "0"
+                    message = "Receipt saved • scan next item"
+                    refreshSelectedShipment()
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun completeSelectedReceiving() {
+        val shipment = selectedShipment ?: return
+        if (busy) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.completeReceiving(shipment.id) }
+            val updated = if (response.ok) runCatching { graph.api.parseShipment(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (updated != null) {
+                    selectedShipment = updated
+                    message = "Receiving complete • stow tasks ready"
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun completeStowTask(taskId: String, destination: String) {
+        if (destination.isBlank() || busy) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh {
+                graph.api.completeStow(taskId, UUID.randomUUID().toString(), destination)
+            }
+            ui {
+                busy = false
+                if (response.ok) {
+                    message = "Stow confirmed at ${destination.uppercase()}"
+                    refreshSelectedShipment()
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    private fun refreshSelectedShipment() {
+        val id = selectedShipment?.id ?: return
+        worker.execute {
+            val response = callWithRefresh { graph.api.getShipments() }
+            val list = if (response.ok) runCatching { graph.api.parseShipments(response.body) }.getOrNull() else null
+            ui {
+                if (list != null) {
+                    shipments = list.filter { it.status != "COMPLETED" && it.status != "CANCELLED" }
+                    selectedShipment = list.firstOrNull { it.id == id }
+                }
+            }
+        }
+    }
+
+    fun openReplenishment() {
+        screen = AppScreen.REPLENISHMENT
+        activeReplenishment = null
+        loadReplenishmentQueue()
+    }
+
+    fun loadReplenishmentQueue() {
+        if (busy) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.getReplenishmentQueue(mine = false) }
+            val list = if (response.ok) runCatching { graph.api.parseReplenishmentQueue(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (list != null) {
+                    replenishmentTasks = list
+                    activeReplenishment = activeReplenishment?.let { active -> list.firstOrNull { it.id == active.id } ?: active }
+                    message = if (list.isEmpty()) "No replenishment work" else "Select a replenishment task"
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun claimReplenishment(task: ReplenishmentSummary) {
+        if (busy) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.claimReplenishment(task.id) }
+            val updated = if (response.ok) runCatching { graph.api.parseReplenishmentEnvelope(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (updated != null) {
+                    activeReplenishment = updated
+                    replenishmentQtyInput = updated.qty.toString()
+                    syncReplenishmentPhase(updated)
+                    message = "Replenishment claimed • scan ${updated.sourceLocationId}"
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun completeActiveReplenishment() {
+        val task = activeReplenishment ?: return
+        val qty = replenishmentQtyInput.toIntOrNull() ?: 0
+        if (qty <= 0 || busy) {
+            errorMessage = "Enter actual moved quantity"
+            return
+        }
+        busy = true
+        worker.execute {
+            val response = callWithRefresh {
+                graph.api.completeReplenishment(task.id, UUID.randomUUID().toString(), qty)
+            }
+            val updated = if (response.ok) runCatching { graph.api.parseReplenishmentEnvelope(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (updated != null) {
+                    activeReplenishment = updated
+                    replenishmentPhase = ReplenishmentScanPhase.COMPLETE
+                    message = "Replenishment ${updated.status.lowercase()} • inventory committed"
+                    loadReplenishmentQueue()
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    private fun syncReplenishmentPhase(task: ReplenishmentSummary) {
+        replenishmentPhase = when (task.status) {
+            "CLAIMED" -> ReplenishmentScanPhase.SOURCE
+            "SOURCE_CONFIRMED" -> ReplenishmentScanPhase.ITEM
+            "STARTED" -> ReplenishmentScanPhase.DESTINATION
+            "DESTINATION_CONFIRMED" -> ReplenishmentScanPhase.COMPLETE
+            else -> ReplenishmentScanPhase.SOURCE
+        }
+    }
+
+    private fun resetOperationScanner() {
+        operationSourceInput = ""
+        operationDestinationInput = ""
+        operationProduct = null
+        operationQtyInput = "1"
+        operationScanPhase = OperationScanPhase.SOURCE
+    }
+
+    private fun resolveBarcode(
+        barcode: String,
+        onResolved: (BarcodeProduct) -> Unit,
+    ) {
+        worker.execute {
+            val response = callWithRefresh { graph.api.inventoryByBarcode(barcode.trim()) }
+            val product = if (response.ok) runCatching { graph.api.parseBarcodeProduct(response.body) }.getOrNull() else null
+            ui {
+                if (product != null) onResolved(product)
+                else {
+                    errorMessage = if (response.code == 404) "Barcode is not mapped" else graph.api.parseConflictMessage(response.body)
+                    message = "Item rejected"
+                }
+            }
+        }
+    }
+
+    private fun handleOperationSync(result: OperationSyncResult) {
+        ui {
+            when (result) {
+                is OperationSyncResult.Acked -> {
+                    message = "Operation confirmed by server"
+                    when (result.kind) {
+                        PendingOperationEvent.Kind.UNPACK_SCAN -> {
+                            unpackSummary?.let { startOrResumeUnpack(it.temperatureClass) }
+                        }
+                        PendingOperationEvent.Kind.BOH_MOVE,
+                        PendingOperationEvent.Kind.DAMAGE -> resetOperationScanner()
+                        PendingOperationEvent.Kind.RECOVERY_STOW -> loadRecovery()
+                    }
+                }
+                is OperationSyncResult.Queued -> message = result.reason
+                is OperationSyncResult.Rejected -> {
+                    errorMessage = result.message
+                    message = "Operation rejected"
+                }
+                OperationSyncResult.AuthenticationRequired -> expireSession()
+            }
+        }
+    }
+
     fun clearError() {
         errorMessage = null
     }
