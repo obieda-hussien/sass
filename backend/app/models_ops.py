@@ -286,6 +286,7 @@ class DeviceTelemetry(Base):
     battery_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     connectivity: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
     last_location_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    activity: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
