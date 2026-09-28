@@ -30,6 +30,9 @@ class HeartbeatRequest(BaseModel):
     current_task_id: str | None = None
     app_version: str | None = None
     connectivity: str = "ONLINE"
+    battery_percent: int | None = Field(default=None, ge=0, le=100)
+    last_location_id: str | None = None
+    activity: str | None = Field(default=None, max_length=80)
 
 
 class InventoryMoveRequest(BaseModel):
