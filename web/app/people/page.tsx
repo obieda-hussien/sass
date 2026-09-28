@@ -373,6 +373,52 @@ export default function PeoplePage() {
     }
   }
 
+  async function submitShiftTemplate(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const created = await createShiftTemplate(token, {
+        site_id: "DEMO",
+        name: shiftTemplateForm.name,
+        start_minute: minutesFromTime(shiftTemplateForm.start),
+        end_minute: minutesFromTime(shiftTemplateForm.end),
+        timezone_name: "Africa/Cairo",
+        break_minutes: Number(shiftTemplateForm.break_minutes || "0"),
+        grace_minutes: Number(shiftTemplateForm.grace_minutes || "0"),
+      });
+      setNotice(`Shift template created: ${created.name}`);
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not create shift template");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitShiftAssignment(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !shiftAssignmentForm.user_id || !shiftAssignmentForm.shift_template_id) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const created = await assignShift(token, {
+        user_id: shiftAssignmentForm.user_id,
+        shift_template_id: shiftAssignmentForm.shift_template_id,
+        shift_date: shiftAssignmentForm.shift_date,
+      });
+      setNotice(`Shift assigned for ${created.shift_date}`);
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not assign shift");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const totals = useMemo(() => {
     return employees.reduce(
       (acc, item) => {
@@ -452,6 +498,13 @@ export default function PeoplePage() {
       {notice && <section className="noticeBox">{notice}</section>}
       {error && <section className="alert">{error}</section>}
 
+      <nav className="sectionJumpNav" aria-label="People sections">
+        <a href="#onboarding">Add employee</a>
+        <a href="#schedule">Shift schedule</a>
+        <a href="#team">Team</a>
+        <a href="#payroll">Attendance & payroll</a>
+      </nav>
+
       <section className="headlineGrid workforceStats">
         <article className="heroCard">
           <span>Employees</span>
@@ -470,7 +523,7 @@ export default function PeoplePage() {
         </article>
       </section>
 
-      <section className="panelGrid workforceGrid">
+      <section id="onboarding" className="panelGrid workforceGrid">
         <article className="panel">
           <div className="panelHeading">
             <div>
@@ -482,7 +535,23 @@ export default function PeoplePage() {
             <label><span>Full name</span><input required value={form.full_name} onChange={(e) => setForm({...form, full_name:e.target.value})} /></label>
             <label><span>Employee code</span><input required value={form.employee_code} onChange={(e) => setForm({...form, employee_code:e.target.value})} /></label>
             <label><span>Username</span><input required value={form.username} onChange={(e) => setForm({...form, username:e.target.value})} /></label>
-            <label><span>Initial password <small>(blank = generated)</small></span><input type="password" value={form.password} onChange={(e) => setForm({...form, password:e.target.value})} /></label>
+            <label className="pinField">
+              <span>Initial PIN <small>(6–10 digits; blank = random 6 digits)</small></span>
+              <div className="inlineFieldAction">
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]{6,10}"
+                  minLength={6}
+                  maxLength={10}
+                  value={form.password}
+                  onChange={(e) => setForm({...form, password:e.target.value.replace(/\D/g, "").slice(0, 10)})}
+                />
+                <button type="button" className="miniAction" onClick={() => setForm({...form, password:generateSixDigitPin()})}>
+                  Generate 6-digit
+                </button>
+              </div>
+            </label>
             <label><span>Email</span><input type="email" value={form.email} onChange={(e) => setForm({...form, email:e.target.value})} /></label>
             <label><span>Phone</span><input value={form.phone} onChange={(e) => setForm({...form, phone:e.target.value})} /></label>
             <label className="wideField"><span>Address</span><input value={form.address} onChange={(e) => setForm({...form, address:e.target.value})} /></label>
@@ -534,7 +603,52 @@ export default function PeoplePage() {
         </article>
       </section>
 
-      <section className="panel employeesPanel">
+      <section id="schedule" className="panel opsSection">
+        <div className="panelHeading">
+          <div>
+            <p className="eyebrow">SHIFT SCHEDULE</p>
+            <h2>Templates & next 7 days</h2>
+          </div>
+          <span className="chip">{roster.length} assignments</span>
+        </div>
+        <p className="sectionHelp">
+          Create a reusable shift once, then assign employees by date. Clock-in/out can use the scheduled window automatically.
+        </p>
+        <div className="managerForms">
+          <form className="managerForm" onSubmit={submitShiftTemplate}>
+            <h3>Create shift template</h3>
+            <label><span>Name</span><input required value={shiftTemplateForm.name} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, name:e.target.value})} /></label>
+            <label><span>Start</span><input type="time" required value={shiftTemplateForm.start} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, start:e.target.value})} /></label>
+            <label><span>End</span><input type="time" required value={shiftTemplateForm.end} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, end:e.target.value})} /></label>
+            <label><span>Break minutes</span><input type="number" min="0" value={shiftTemplateForm.break_minutes} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, break_minutes:e.target.value})} /></label>
+            <label><span>Grace minutes</span><input type="number" min="0" value={shiftTemplateForm.grace_minutes} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, grace_minutes:e.target.value})} /></label>
+            <button className="primaryButton" disabled={busy}>Save template</button>
+          </form>
+
+          <form className="managerForm" onSubmit={submitShiftAssignment}>
+            <h3>Assign employee</h3>
+            <label><span>Employee</span><select value={shiftAssignmentForm.user_id} onChange={(e) => setShiftAssignmentForm({...shiftAssignmentForm, user_id:e.target.value})}>{employees.map((employee) => <option key={employee.user_id} value={employee.user_id}>{employee.profile?.full_name ?? employee.username}</option>)}</select></label>
+            <label><span>Shift</span><select value={shiftAssignmentForm.shift_template_id} onChange={(e) => setShiftAssignmentForm({...shiftAssignmentForm, shift_template_id:e.target.value})}>{shiftTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · {timeFromMinutes(template.start_minute)}–{timeFromMinutes(template.end_minute)}</option>)}</select></label>
+            <label><span>Date</span><input type="date" required value={shiftAssignmentForm.shift_date} onChange={(e) => setShiftAssignmentForm({...shiftAssignmentForm, shift_date:e.target.value})} /></label>
+            <button className="primaryButton" disabled={busy || shiftTemplates.length === 0 || employees.length === 0}>Assign shift</button>
+          </form>
+        </div>
+
+        <div className="rosterGrid" style={{marginTop: 12}}>
+          {roster.length === 0 ? (
+            <div className="empty compactEmpty"><span>⌚</span><div><strong>No scheduled shifts in the next 7 days</strong><p>Create a template, then assign an employee.</p></div></div>
+          ) : roster.map((item) => (
+            <div className="rosterRow" key={item.id}>
+              <div><strong>{item.username ?? item.user_id}</strong><small>{item.template_name ?? "Custom shift"} · {item.shift_date}</small></div>
+              <div><small>Start</small><strong>{new Date(item.scheduled_start_at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}</strong></div>
+              <div><small>End</small><strong>{new Date(item.scheduled_end_at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}</strong></div>
+              <div><small>Status</small><strong>{item.status}</strong></div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section id="team" className="panel employeesPanel">
         <div className="panelHeading">
           <div>
             <p className="eyebrow">TEAM</p>
@@ -592,7 +706,7 @@ export default function PeoplePage() {
       </section>
 
       {selectedEmployee?.profile && (
-        <section className="panel managerPanel">
+        <section id="payroll" className="panel managerPanel">
           <div className="panelHeading">
             <div>
               <p className="eyebrow">SUPERVISOR ACTIONS</p>
