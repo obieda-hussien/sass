@@ -174,12 +174,16 @@ class ForgotPasswordRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
-    new_password: str = Field(min_length=6, max_length=10, pattern=r"^\\d{6,10}$")
+    new_password: str = Field(min_length=6, max_length=10, pattern=r"^\d{6,10}$")
+
+
+class CompleteFirstLoginRequest(BaseModel):
+    new_password: str = Field(min_length=6, max_length=10, pattern=r"^\d{6,10}$")
 
 
 class EmployeeCreateRequest(BaseModel):
     username: str = Field(min_length=3, max_length=80)
-    password: str | None = Field(default=None, min_length=6, max_length=10, pattern=r"^\\d{6,10}$")
+    password: str | None = Field(default=None, min_length=6, max_length=10, pattern=r"^\d{6,10}$")
     role: str = "PICKER"
     employee_code: str = Field(min_length=2, max_length=40)
     full_name: str = Field(min_length=2, max_length=160)
@@ -244,7 +248,7 @@ class PayAdjustmentCreateRequest(BaseModel):
 
 
 class TemporaryPasswordRequest(BaseModel):
-    password: str | None = Field(default=None, min_length=6, max_length=10, pattern=r"^\\d{6,10}$")
+    password: str | None = Field(default=None, min_length=6, max_length=10, pattern=r"^\d{6,10}$")
 
 
 class PromotionRequest(BaseModel):
