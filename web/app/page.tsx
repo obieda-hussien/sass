@@ -142,6 +142,7 @@ export default function ControlTowerPage() {
           <a className="moduleCard" href="/people#onboarding"><span className="moduleTag">PEOPLE</span><strong>Add a new employee</strong><small>Create account, PIN, contact details, role and payroll basics.</small></a>
           <a className="moduleCard" href="/people#team"><span className="moduleTag">TEAM</span><strong>Manage / promote employee</strong><small>Open employee details, promotion history, attendance and approved adjustments.</small></a>
           <a className="moduleCard" href="/people#schedule"><span className="moduleTag">ROTA</span><strong>Build the shift schedule</strong><small>Create shift templates and assign employees to dated shifts.</small></a>
+          <a className="moduleCard" href="/system"><span className="moduleTag">ADMIN</span><strong>Audit, permissions & system health</strong><small>Inspect sensitive changes, outbox/telemetry health and explicit access overrides.</small></a>
         </div>
       </section>
 
