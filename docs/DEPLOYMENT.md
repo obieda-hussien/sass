@@ -159,7 +159,8 @@ The v0.5 migration chain includes:
 
 - PDA presence / telemetry support;
 - user `must_change_password` + `deleted_at`;
-- transactional `outbox_events`.
+- transactional `outbox_events`;
+- case-insensitive unique username index on `lower(username)`.
 
 Deployments must allow the startup migrator to reach the current Alembic head before serving normal workload.
 
