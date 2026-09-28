@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 fun CameraScannerOverlay(
+    prompt: String = "Point the camera at a barcode",
     onScan: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -59,13 +60,14 @@ fun CameraScannerOverlay(
                 TextButton(onClick = onDismiss) { Text("Cancel") }
             }
         } else {
-            CameraBarcodePreview(onScan = onScan, onDismiss = onDismiss)
+            CameraBarcodePreview(prompt = prompt, onScan = onScan, onDismiss = onDismiss)
         }
     }
 }
 
 @Composable
 private fun CameraBarcodePreview(
+    prompt: String,
     onScan: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -74,7 +76,7 @@ private fun CameraBarcodePreview(
     val executor = remember { Executors.newSingleThreadExecutor() }
     val scanner = remember { BarcodeScanning.getClient() }
     val emitted = remember { AtomicBoolean(false) }
-    var status by remember { mutableStateOf("Point the camera at a barcode") }
+    var status by remember(prompt) { mutableStateOf(prompt) }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -160,7 +162,10 @@ private fun CameraBarcodePreview(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(status)
+                Column(Modifier.weight(1f)) {
+                    Text(status, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    if (status != prompt) Text(prompt, style = MaterialTheme.typography.bodySmall)
+                }
                 TextButton(onClick = onDismiss) { Text("Close") }
             }
         }

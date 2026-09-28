@@ -55,7 +55,7 @@ from .services.workforce import (
 from .telemetry import emit as emit_telemetry, ping as telemetry_ping
 from .ops_router import router as ops_router
 from .observability import configure_observability
-from .services.eventing import outbox_dispatch_loop, outbox_health
+from .services.eventing import enqueue_outbox, outbox_dispatch_loop, outbox_health
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -107,7 +107,7 @@ class ApiPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
-app = FastAPI(title="FulfillOS", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="FulfillOS", version="0.5.1", lifespan=lifespan)
 app.add_middleware(ApiPrefixMiddleware)
 app.include_router(ops_router)
 configure_observability(app, engine)
@@ -156,7 +156,7 @@ def manager_actor(who=Depends(actor)) -> tuple[User, Device]:
 
 @app.get("/")
 def root():
-    return {"name": "FulfillOS", "version": "0.5.0", "dashboard": "/dashboard"}
+    return {"name": "FulfillOS", "version": "0.5.1", "dashboard": "/dashboard"}
 
 
 @app.get("/health")
@@ -172,7 +172,7 @@ def health():
     telemetry_status = "connected" if telemetry_ping() else "disabled_or_unavailable"
     return {
         "ok": database_status == "connected",
-        "version": "0.5.0",
+        "version": "0.5.1",
         "database": database_status,
         "telemetry": telemetry_status,
         "server_time": datetime.now(timezone.utc).isoformat(),
@@ -185,7 +185,7 @@ def admin_system_health(
     db: Session = Depends(get_db),
 ):
     return {
-        "version": "0.5.0",
+        "version": "0.5.1",
         "database": "connected",
         "telemetry": "connected" if telemetry_ping() else "disabled_or_unavailable",
         "outbox": outbox_health(db),
@@ -329,11 +329,16 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
     with db.begin():
         now = datetime.now(timezone.utc)
         device = db.get(Device, device.id)
+        previous_status = device.status
+        previous_telemetry = db.get(_models_ops.DeviceTelemetry, device.id)
+        previous_activity = previous_telemetry.activity if previous_telemetry else None
+        previous_connectivity = previous_telemetry.connectivity if previous_telemetry else None
+
         device.last_seen_at = now
         device.last_user_id = user.id
         device.status = req.connectivity.strip().upper()
         device.app_version = req.app_version or device.app_version
-        update_device_telemetry(
+        telemetry = update_device_telemetry(
             db,
             device.id,
             battery_percent=req.battery_percent,
@@ -345,6 +350,30 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
         current_task_id = active.id if active else None
         worker_state = get_worker_state(db, user.id, create=True)
         worker_state_name = worker_state.state if worker_state else "OFFLINE"
+
+        presence_changed = (
+            previous_status != device.status
+            or previous_connectivity != telemetry.connectivity
+            or previous_activity != telemetry.activity
+        )
+        if presence_changed:
+            enqueue_outbox(
+                db,
+                topic="device.presence.changed",
+                aggregate_type="DEVICE",
+                aggregate_id=device.id,
+                payload={
+                    "device_id": device.id,
+                    "user_id": user.id,
+                    "connectivity": telemetry.connectivity,
+                    "activity": telemetry.activity,
+                    "battery_percent": telemetry.battery_percent,
+                    "last_location_id": telemetry.last_location_id,
+                    "current_task_id": current_task_id,
+                    "worker_state": worker_state_name,
+                    "observed_at": now,
+                },
+            )
     mismatch = bool(req.current_task_id and req.current_task_id != current_task_id)
     emit_telemetry(
         "device_health",
@@ -1413,9 +1442,6 @@ def control_tower_compat_summary(db: Session = Depends(get_db)):
             state = "OTHER_ACTIVITY"
         active_by_user[task.assigned_user_id] = state
 
-    for state in active_by_user.values():
-        associate_states[state] += 1
-
     device_state_by_user: dict[str, str] = {}
     live_cutoff = datetime.now(timezone.utc) - timedelta(seconds=15)
     for device in devices:
@@ -1433,10 +1459,17 @@ def control_tower_compat_summary(db: Session = Depends(get_db)):
         if current != "ONLINE":
             device_state_by_user[device.last_user_id] = "ONLINE" if fresh_online else "OFFLINE"
 
-    for user_id, device_state in device_state_by_user.items():
-        if user_id in active_by_user:
-            continue
-        associate_states["WAITING" if device_state == "ONLINE" else "OFFLINE"] += 1
+    # Presence wins over stale workflow labels. A worker with an active task but
+    # no fresh foreground PDA heartbeat is OFFLINE; the task itself still
+    # remains visible in task counts and recovery/dispatch details.
+    all_visible_users = set(active_by_user) | set(device_state_by_user)
+    for user_id in all_visible_users:
+        if device_state_by_user.get(user_id) != "ONLINE":
+            associate_states["OFFLINE"] += 1
+        elif user_id in active_by_user:
+            associate_states[active_by_user[user_id]] += 1
+        else:
+            associate_states["WAITING"] += 1
 
     recovery_required = []
     for task in tasks:

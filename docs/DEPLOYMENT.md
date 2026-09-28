@@ -94,7 +94,7 @@ The deployment workflow validates that:
 ```json
 {
   "ok": true,
-  "version": "0.5.0",
+  "version": "0.5.1",
   "database": "connected",
   "telemetry": "connected"
 }
@@ -192,8 +192,8 @@ Production should terminate TLS at the hosting layer and preserve same-site cook
 Current Android release metadata:
 
 ```text
-versionName = 0.5.0
-versionCode = 6
+versionName = 0.5.1
+versionCode = 7
 minSdk = 26
 targetSdk = 36
 compileSdk = 37
@@ -219,9 +219,9 @@ Artifact labels are derived from Gradle `versionName` instead of being hard-code
 Example:
 
 ```text
-FulfillOS-v0.5.0-production-apks
-  ├─ FulfillOS-v0.5.0-prod-debug.apk
-  ├─ FulfillOS-v0.5.0-prod-release.apk
+FulfillOS-v0.5.1-production-apks
+  ├─ FulfillOS-v0.5.1-prod-debug.apk
+  ├─ FulfillOS-v0.5.1-prod-release.apk
   ├─ production-url.txt
   └─ SHA256SUMS.txt
 ```

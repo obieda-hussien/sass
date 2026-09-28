@@ -27,7 +27,7 @@ def _resource() -> Resource:
     return Resource.create(
         {
             "service.name": os.getenv("OTEL_SERVICE_NAME", "fulfillos-api"),
-            "service.version": os.getenv("FULFILLOS_VERSION", "0.5.0"),
+            "service.version": os.getenv("FULFILLOS_VERSION", "0.5.1"),
             "deployment.environment": os.getenv("VERCEL_ENV", os.getenv("ENVIRONMENT", "development")),
         }
     )

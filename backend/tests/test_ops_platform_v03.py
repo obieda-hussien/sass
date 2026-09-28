@@ -26,6 +26,7 @@ from app.services.ops_platform import (
     search_orders,
     set_worker_state,
     shortage_side_effects,
+    worker_dispatch_status,
 )
 from app.services.workforce import payroll_preview
 from app.seed import ensure_location
@@ -115,6 +116,31 @@ def test_first_claim_wins_and_picker_cannot_hold_second_order(db):
         with pytest.raises(OpsError) as second:
             claim_task(db, task2, picker1.id, "PDA-DEMO-001")
         assert second.value.code == "PICKER_NOT_ELIGIBLE"
+
+
+def test_dispatch_presence_requires_fresh_online_pda(db):
+    with db.begin():
+        picker = _user(db, "picker1")
+        device = db.get(Device, "PDA-DEMO-001")
+        assert device is not None
+        set_worker_state(db, picker.id, "AVAILABLE", force=True)
+
+        device.status = "ONLINE"
+        device.last_seen_at = datetime.now(timezone.utc)
+        live = worker_dispatch_status(db, picker)
+        assert live["device_live"] is True
+        assert "PDA_OFFLINE_OR_STALE" not in live["reasons"]
+
+        device.status = "OFFLINE"
+        offline = worker_dispatch_status(db, picker)
+        assert offline["device_live"] is False
+        assert "PDA_OFFLINE_OR_STALE" in offline["reasons"]
+
+        device.status = "ONLINE"
+        device.last_seen_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+        stale = worker_dispatch_status(db, picker)
+        assert stale["device_live"] is False
+        assert "PDA_OFFLINE_OR_STALE" in stale["reasons"]
 
 
 def test_break_worker_cannot_receive_manual_assignment(db):

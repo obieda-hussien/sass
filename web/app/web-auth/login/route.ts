@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
       username: String(payload.username ?? "").trim(),
       password: String(payload.password ?? ""),
       device_id: WEB_DEVICE_ID,
-      app_version: "web-0.5.0",
+      app_version: "web-0.5.1",
     }),
     cache: "no-store",
   });

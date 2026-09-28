@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -36,11 +37,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
 import com.obieda.fulfillos.data.ScannerBroadcastReceiver
@@ -96,6 +100,24 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FulfillApp(vm: AppViewModel) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, vm) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> vm.onAppForegrounded()
+                Lifecycle.Event.ON_PAUSE -> vm.onAppBackgrounded()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            vm.onAppForegrounded()
+        }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            vm.onAppBackgrounded()
+        }
+    }
     if (vm.booting) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -118,6 +140,12 @@ private fun FulfillApp(vm: AppViewModel) {
 
     var cameraOpen by remember { mutableStateOf(false) }
 
+    LaunchedEffect(vm.cameraRequestId) {
+        if (vm.cameraRequestId > 0 && vm.appForeground) {
+            cameraOpen = true
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -129,7 +157,7 @@ private fun FulfillApp(vm: AppViewModel) {
                 },
                 actions = {
                     AssistChip(onClick = {}, label = { Text(vm.connectivity.name) })
-                    TextButton(onClick = { cameraOpen = true }) { Text("Camera") }
+                    TextButton(onClick = { vm.requestCameraScan("Manual camera scan") }) { Text("Camera") }
                     TextButton(onClick = vm::logout) { Text("Logout") }
                 },
             )
@@ -158,6 +186,7 @@ private fun FulfillApp(vm: AppViewModel) {
 
     if (cameraOpen) {
         CameraScannerOverlay(
+            prompt = vm.cameraRequestHint,
             onScan = { value ->
                 vm.submitScanValue(value)
                 cameraOpen = false

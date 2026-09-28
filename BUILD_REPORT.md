@@ -8,8 +8,8 @@ FulfillOS v0.5 builds on the v0.4 governance/operations platform and closes the 
 
 Current Android release metadata:
 
-- versionName: `0.5.0`
-- versionCode: `6`
+- versionName: `0.5.1`
+- versionCode: `7`
 - minSdk: `26`
 - targetSdk: `36`
 - compileSdk: `37`
