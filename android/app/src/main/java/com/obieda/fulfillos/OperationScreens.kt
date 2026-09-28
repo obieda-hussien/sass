@@ -314,30 +314,43 @@ fun ReceiveScreen(vm: AppViewModel) {
             if (selected.status == "STOWING" || selected.stowTasks.isNotEmpty()) {
                 Text("Stow tasks", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 selected.stowTasks.filter { it.status != "COMPLETED" }.forEach { task ->
-                    var destination by remember(task.id) { mutableStateOf("") }
-                    ElevatedCard(Modifier.fillMaxWidth()) {
+                    val selectedTask = vm.selectedStowTaskId == task.id
+                    ElevatedCard(
+                        onClick = { vm.selectStowTask(task.id) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("${task.productId.take(12)} · ${task.qty} units", fontWeight = FontWeight.Bold)
                             val line = selected.lines.firstOrNull { it.productId == task.productId }
                             if (line?.recommendedStow?.isNotEmpty() == true) {
                                 Text("Recommended: ${line.recommendedStow.take(3).joinToString()}", style = MaterialTheme.typography.bodySmall)
                             }
-                            OutlinedTextField(
-                                value = destination,
-                                onValueChange = { destination = it.uppercase() },
-                                label = { Text("Destination bin") },
-                                modifier = Modifier.fillMaxWidth(),
+                            Text(
+                                if (selectedTask) "Selected • scan destination below" else "Tap to select this stow task",
+                                style = MaterialTheme.typography.bodySmall,
                             )
-                            Button(
-                                onClick = { vm.completeStowTask(task.id, destination) },
-                                enabled = destination.isNotBlank() && !vm.busy,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) { Text("Confirm stow") }
                         }
                     }
                 }
+
+                vm.selectedStowTaskId?.let {
+                    OutlinedTextField(
+                        value = vm.stowDestinationInput,
+                        onValueChange = { vm.stowDestinationInput = it.uppercase() },
+                        label = { Text("Destination bin") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    ScanEntry(vm, "Scan the destination bin for the selected stow task.")
+                    Button(
+                        onClick = vm::confirmSelectedStow,
+                        enabled = vm.stowDestinationInput.isNotBlank() && !vm.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Confirm stow") }
+                }
             }
-            OutlinedButton(onClick = vm::loadShipments, modifier = Modifier.fillMaxWidth()) { Text("Refresh / choose shipment") }
+            OutlinedButton(onClick = vm::clearSelectedShipment, modifier = Modifier.fillMaxWidth()) {
+                Text("Back to shipment list")
+            }
         }
     }
 }
