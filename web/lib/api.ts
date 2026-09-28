@@ -430,6 +430,8 @@ export type DispatchWorker = {
   active_task_id: string | null;
   qualifications: string[];
   required_qualifications: string[];
+  device_live: boolean;
+  device_last_seen_at: string | null;
   device?: {
     device_id: string;
     battery_percent: number | null;
