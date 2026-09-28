@@ -6,13 +6,19 @@ import {
   addPayAdjustment,
   addPerformanceEvent,
   createEmployee,
+  createShiftTemplate,
+  assignShift,
   getEmployees,
   getPasswordResets,
+  getRoster,
+  getShiftTemplates,
   issueTemporaryPassword,
   managerLogin,
   promoteEmployee,
   type Employee,
   type PasswordResetItem,
+  type ShiftAssignment,
+  type ShiftTemplate,
 } from "../../lib/api";
 
 type CreateForm = {
@@ -56,6 +62,23 @@ const emptyForm: CreateForm = {
   grace_minutes: "10",
 };
 
+function generateSixDigitPin() {
+  const value = new Uint32Array(1);
+  window.crypto.getRandomValues(value);
+  return String(100000 + (value[0] % 900000));
+}
+
+function timeFromMinutes(value: number) {
+  const hours = Math.floor(value / 60) % 24;
+  const minutes = value % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function minutesFromTime(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
 function money(cents: number, currency = "EGP") {
   return new Intl.NumberFormat("en-EG", {
     style: "currency",
@@ -70,6 +93,8 @@ export default function PeoplePage() {
   const [loginPassword, setLoginPassword] = useState("");
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [resets, setResets] = useState<PasswordResetItem[]>([]);
+  const [shiftTemplates, setShiftTemplates] = useState<ShiftTemplate[]>([]);
+  const [roster, setRoster] = useState<ShiftAssignment[]>([]);
   const [form, setForm] = useState<CreateForm>(emptyForm);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -97,6 +122,18 @@ export default function PeoplePage() {
     new_base_salary: "",
     reason: "",
   });
+  const [shiftTemplateForm, setShiftTemplateForm] = useState({
+    name: "Middle",
+    start: "14:00",
+    end: "23:00",
+    break_minutes: "30",
+    grace_minutes: "10",
+  });
+  const [shiftAssignmentForm, setShiftAssignmentForm] = useState({
+    user_id: "",
+    shift_template_id: "",
+    shift_date: new Date().toISOString().slice(0, 10),
+  });
 
   useEffect(() => {
     const saved = window.localStorage.getItem("fulfillos_admin_token");
@@ -106,12 +143,26 @@ export default function PeoplePage() {
   async function refresh(activeToken = token) {
     if (!activeToken) return;
     try {
-      const [people, resetData] = await Promise.all([
+      const today = new Date();
+      const from = today.toISOString().slice(0, 10);
+      const end = new Date(today);
+      end.setDate(end.getDate() + 7);
+      const to = end.toISOString().slice(0, 10);
+      const [people, resetData, templateData, rosterData] = await Promise.all([
         getEmployees(activeToken),
         getPasswordResets(activeToken),
+        getShiftTemplates(activeToken),
+        getRoster(activeToken, from, to),
       ]);
       setEmployees(people.employees);
       setResets(resetData.requests);
+      setShiftTemplates(templateData.templates);
+      setRoster(rosterData.assignments);
+      setShiftAssignmentForm((current) => ({
+        ...current,
+        user_id: current.user_id || people.employees[0]?.user_id || "",
+        shift_template_id: current.shift_template_id || templateData.templates[0]?.id || "",
+      }));
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to load workforce data");
