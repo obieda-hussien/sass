@@ -1442,9 +1442,6 @@ def control_tower_compat_summary(db: Session = Depends(get_db)):
             state = "OTHER_ACTIVITY"
         active_by_user[task.assigned_user_id] = state
 
-    for state in active_by_user.values():
-        associate_states[state] += 1
-
     device_state_by_user: dict[str, str] = {}
     live_cutoff = datetime.now(timezone.utc) - timedelta(seconds=15)
     for device in devices:
@@ -1462,10 +1459,17 @@ def control_tower_compat_summary(db: Session = Depends(get_db)):
         if current != "ONLINE":
             device_state_by_user[device.last_user_id] = "ONLINE" if fresh_online else "OFFLINE"
 
-    for user_id, device_state in device_state_by_user.items():
-        if user_id in active_by_user:
-            continue
-        associate_states["WAITING" if device_state == "ONLINE" else "OFFLINE"] += 1
+    # Presence wins over stale workflow labels. A worker with an active task but
+    # no fresh foreground PDA heartbeat is OFFLINE; the task itself still
+    # remains visible in task counts and recovery/dispatch details.
+    all_visible_users = set(active_by_user) | set(device_state_by_user)
+    for user_id in all_visible_users:
+        if device_state_by_user.get(user_id) != "ONLINE":
+            associate_states["OFFLINE"] += 1
+        elif user_id in active_by_user:
+            associate_states[active_by_user[user_id]] += 1
+        else:
+            associate_states["WAITING"] += 1
 
     recovery_required = []
     for task in tasks:
