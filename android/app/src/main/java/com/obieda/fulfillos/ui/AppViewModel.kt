@@ -37,6 +37,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     var usernameInput by mutableStateOf(graph.secureSession.getUsername().orEmpty())
     var passwordInput by mutableStateOf("")
+    var newPinInput by mutableStateOf("")
+    var confirmPinInput by mutableStateOf("")
     var connectivity by mutableStateOf(graph.connectivity.state)
         private set
     var message by mutableStateOf("Starting…")
@@ -71,14 +73,14 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
-            if (authenticated) sendHeartbeat()
+            if (authenticated && session?.mustChangePassword != true) sendHeartbeat()
             main.postDelayed(this, heartbeatIntervalMs)
         }
     }
 
     private val offerPollRunnable = object : Runnable {
         override fun run() {
-            if (authenticated && connectivity == ConnectivityState.ONLINE && !busy) {
+            if (authenticated && session?.mustChangePassword != true && connectivity == ConnectivityState.ONLINE && !busy) {
                 pollWaitingOrders()
             }
             main.postDelayed(this, offerPollIntervalMs)
@@ -112,7 +114,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         worker.execute {
             val recovered = graph.sessions.recoverBlocking().getOrNull()
             var task: TaskSnapshot? = null
-            if (recovered != null) {
+            if (recovered != null && !recovered.mustChangePassword) {
                 val response = callWithRefresh { graph.api.getActiveTask() }
                 if (response.ok) task = runCatching { graph.api.parseTaskEnvelope(response.body) }.getOrNull()
             }
@@ -164,7 +166,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             val result = graph.sessions.loginBlocking(usernameInput, passwordInput)
             val loggedIn = result.getOrNull()
             var task: TaskSnapshot? = null
-            if (loggedIn != null) {
+            if (loggedIn != null && !loggedIn.mustChangePassword) {
                 val active = graph.api.getActiveTask()
                 if (active.ok) task = runCatching { graph.api.parseTaskEnvelope(active.body) }.getOrNull()
             }
@@ -177,8 +179,46 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     session = loggedIn
                     authenticated = true
                     passwordInput = ""
-                    message = if (task != null) "Signed in • active order restored" else "Signed in • waiting for orders"
+                    message = when {
+                        loggedIn.mustChangePassword -> "Temporary PIN accepted • create your personal PIN"
+                        task != null -> "Signed in • active order restored"
+                        else -> "Signed in • waiting for orders"
+                    }
                     if (task != null) installTask(task) else screen = AppScreen.HOME
+                }
+            }
+        }
+    }
+
+    fun completeFirstLoginPin() {
+        val newPin = newPinInput.trim()
+        val confirm = confirmPinInput.trim()
+        if (!authenticated || session?.mustChangePassword != true || busy) return
+        if (newPin.length !in 6..10 || !newPin.all(Char::isDigit)) {
+            errorMessage = "PIN must be 6–10 digits"
+            return
+        }
+        if (newPin != confirm) {
+            errorMessage = "PIN confirmation does not match"
+            return
+        }
+        busy = true
+        errorMessage = null
+        message = "Saving your personal PIN…"
+        worker.execute {
+            val result = graph.sessions.completeFirstLoginBlocking(newPin)
+            val updated = result.getOrNull()
+            ui {
+                busy = false
+                if (updated == null) {
+                    errorMessage = result.exceptionOrNull()?.message ?: "Could not save PIN"
+                    message = "PIN change failed"
+                } else {
+                    session = updated
+                    newPinInput = ""
+                    confirmPinInput = ""
+                    message = "PIN changed • waiting for orders"
+                    screen = AppScreen.HOME
                 }
             }
         }
@@ -188,6 +228,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         graph.sessions.logout()
         session = null
         authenticated = false
+        newPinInput = ""
+        confirmPinInput = ""
         currentTask = null
         closedBags = emptyList()
         completionSummary = null
