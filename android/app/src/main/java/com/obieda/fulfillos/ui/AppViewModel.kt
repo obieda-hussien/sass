@@ -148,7 +148,17 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     private val offerPollRunnable = object : Runnable {
         override fun run() {
-            if (appForeground && authenticated && session?.mustChangePassword != true && connectivity == ConnectivityState.ONLINE && !busy) {
+            val waitingSurface = screen == AppScreen.HOME || screen == AppScreen.PICK
+            val eligibleLocalState = currentTask != null || workerState == "AVAILABLE"
+            if (
+                appForeground &&
+                authenticated &&
+                session?.mustChangePassword != true &&
+                connectivity == ConnectivityState.ONLINE &&
+                !busy &&
+                waitingSurface &&
+                eligibleLocalState
+            ) {
                 pollWaitingOrders()
             }
             main.postDelayed(this, offerPollIntervalMs)
@@ -397,15 +407,6 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 }
             }
         }
-    }
-
-    fun startBohFromRecorder() {
-        recordActivity("BOH_MOVE", "MANUAL_BOH_TASK")
-        main.postDelayed({
-            ui {
-                if (workerState == "BOH_MOVE") openBoh()
-            }
-        }, 300L)
     }
 
     fun forgotPassword() {
