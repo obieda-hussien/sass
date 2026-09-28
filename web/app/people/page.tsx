@@ -218,7 +218,7 @@ export default function PeoplePage() {
       setForm(emptyForm);
       setNotice(
         created.temporary_password
-          ? `Employee created. Temporary password: ${created.temporary_password}`
+          ? `Employee created. Temporary PIN: ${created.temporary_password}`
           : "Employee created successfully.",
       );
       await refresh(token);
@@ -237,7 +237,7 @@ export default function PeoplePage() {
     try {
       const result = await issueTemporaryPassword(token, item.id);
       setNotice(
-        `Temporary password for ${item.username ?? item.full_name ?? "employee"}: ${result.temporary_password}`,
+        `Temporary PIN for ${item.username ?? item.full_name ?? "employee"}: ${result.temporary_password}`,
       );
       await refresh(token);
     } catch (cause) {
@@ -594,7 +594,7 @@ export default function PeoplePage() {
                     <small>@{item.username} · {new Date(item.requested_at).toLocaleString()}</small>
                   </div>
                   <button onClick={() => void resolveReset(item)} disabled={busy}>
-                    Issue temporary password
+                    Issue temporary PIN
                   </button>
                 </div>
               ))}
