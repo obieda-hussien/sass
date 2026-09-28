@@ -566,6 +566,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                         scanPhase = PickScanPhase.BIN
                     }
                     message = "Server state refreshed"
+                    requestCameraForCurrentContext()
                 } else if (response.code == 401) {
                     expireSession()
                 }
@@ -1388,6 +1389,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         val destination = canonicalLocation(value)
         if (item.compatibleDestinations.isNotEmpty() && destination !in item.compatibleDestinations) {
             errorMessage = "Destination is not compatible for ${item.title}"
+            requestCameraScan("Scan a compatible recovery destination")
             return
         }
         graph.operations.enqueue(
@@ -1410,7 +1412,10 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 it.id.equals(needle, true) || it.label.equals(needle, true)
             }
             if (match != null) selectShipment(match)
-            else errorMessage = "Choose a shipment first"
+            else {
+                errorMessage = "Shipment not found"
+                requestCameraScan("Scan shipment label or ID")
+            }
             return
         }
 
@@ -1471,6 +1476,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     requestCameraForCurrentContext()
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
+                    requestCameraForCurrentContext()
                 }
             }
         }
@@ -1520,6 +1526,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 } else {
                     errorMessage = "Wrong bin: ${value.trim()} • expected ${item.locationId}"
                     message = "Bin rejected"
+                    requestCameraScan("Scan bin " + item.locationId)
                 }
             }
             PickScanPhase.ITEM -> {
@@ -1527,6 +1534,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 if (item.barcodes.isNotEmpty() && code !in item.barcodes) {
                     errorMessage = "Wrong item barcode • expected ${item.asin ?: item.productId}"
                     message = "Item rejected"
+                    requestCameraScan("Scan " + item.title + " barcode")
                     return
                 }
                 submittingItemId = item.id
@@ -1578,6 +1586,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     submittingItemId = null
                     errorMessage = result.message
                     message = "Reconciled to server state"
+                    requestCameraForCurrentContext()
                 }
                 PickSyncResult.AuthenticationRequired -> expireSession()
             }
