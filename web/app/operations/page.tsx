@@ -12,6 +12,8 @@ import {
   getShipments,
   getSlottingSuggestions,
   managerLogin,
+  getWebSession,
+  managerLogout,
   resumeAvailabilityHold,
   searchOperationalOrders,
   type AvailabilityHold,
@@ -36,6 +38,7 @@ function stateClass(state: string) {
 
 export default function OperationsPage() {
   const [token, setToken] = useState("");
+  const [authChecking, setAuthChecking] = useState(true);
   const [loginUser, setLoginUser] = useState("supervisor");
   const [loginPassword, setLoginPassword] = useState("");
   const [workers, setWorkers] = useState<DispatchWorker[]>([]);
@@ -62,8 +65,16 @@ export default function OperationsPage() {
   });
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("fulfillos_admin_token");
-    if (saved) setToken(saved);
+    void getWebSession()
+      .then((session) => {
+        if (
+          session.authenticated &&
+          ["TEAM_LEADER", "SUPERVISOR", "ADMIN"].includes(session.role.toUpperCase())
+        ) {
+          setToken("session");
+        }
+      })
+      .finally(() => setAuthChecking(false));
   }, []);
 
   async function refresh(activeToken = token) {
@@ -105,8 +116,7 @@ export default function OperationsPage() {
       if (!["TEAM_LEADER", "SUPERVISOR", "ADMIN"].includes(result.role.toUpperCase())) {
         throw new Error("Team leader, supervisor or admin role required");
       }
-      window.localStorage.setItem("fulfillos_admin_token", result.access_token);
-      setToken(result.access_token);
+      setToken("session");
       setLoginPassword("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not sign in");
@@ -226,6 +236,10 @@ export default function OperationsPage() {
     [performance],
   );
 
+  if (authChecking) {
+    return <main className="shell operationsShell"><section className="panel authPanel">Checking secure session…</section></main>;
+  }
+
   if (!token) {
     return (
       <main className="shell operationsShell">
@@ -257,7 +271,7 @@ export default function OperationsPage() {
         <div className="peopleActions">
           <button onClick={() => void refresh()} disabled={busy}>Refresh</button>
           <button onClick={() => {
-            window.localStorage.removeItem("fulfillos_admin_token");
+            void managerLogout();
             setToken("");
           }}>Sign out</button>
         </div>
