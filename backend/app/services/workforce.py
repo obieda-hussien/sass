@@ -39,6 +39,20 @@ class WorkforceError(RuntimeError):
         self.code = code
 
 
+def generate_numeric_pin(length: int = 6) -> str:
+    if length < 6 or length > 10:
+        raise WorkforceError("PIN length must be between 6 and 10 digits", "BAD_PIN_LENGTH")
+    lower = 10 ** (length - 1)
+    return str(lower + secrets.randbelow(9 * lower))
+
+
+def validate_numeric_pin(pin: str) -> str:
+    value = pin.strip()
+    if not value.isdigit() or not 6 <= len(value) <= 10:
+        raise WorkforceError("Password/PIN must contain only 6 to 10 digits", "BAD_PIN")
+    return value
+
+
 def normalize_role(role: str) -> str:
     value = role.strip().upper()
     if value not in ALLOWED_ROLES:
@@ -86,7 +100,7 @@ def create_employee(db: Session, payload: Any) -> tuple[User, str | None]:
         raise WorkforceError("Employee code already exists", "EMPLOYEE_CODE_EXISTS")
 
     role = normalize_role(payload.role)
-    password = payload.password or secrets.token_urlsafe(12)
+    password = validate_numeric_pin(payload.password) if payload.password else generate_numeric_pin(6)
 
     user = User(
         username=username,
@@ -445,7 +459,7 @@ def issue_temporary_password(
     user = db.get(User, reset.user_id)
     if user is None:
         raise WorkforceError("User not found", "USER_NOT_FOUND")
-    password = explicit_password or secrets.token_urlsafe(12)
+    password = validate_numeric_pin(explicit_password) if explicit_password else generate_numeric_pin(6)
     user.password_hash = hash_password(password)
     reset.status = "RESOLVED"
     reset.resolved_at = datetime.now(timezone.utc)
