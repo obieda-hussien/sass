@@ -193,6 +193,16 @@ Team Leader, Supervisor and Admin can access the operations control surface acco
 - rank promotion workflow;
 - promotion history.
 
+### Admin & Audit — `/system`
+
+- authenticated system-health view;
+- PostgreSQL outbox pending/published/failed state;
+- OTLP and incident-webhook configuration visibility;
+- effective permission inspection;
+- role-level allow/deny overrides;
+- user-level allow/deny overrides;
+- sensitive-change audit trail with entity filters.
+
 ### Browser session security
 
 The manager web console no longer stores bearer tokens in `localStorage`. Next.js acts as a BFF:
