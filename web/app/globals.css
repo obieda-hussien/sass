@@ -1196,3 +1196,26 @@ select option {
   color: var(--muted);
   line-height: 1.4;
 }
+
+
+/* v0.5 system administration */
+.permissionChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.compactHeroValue {
+  font-size: clamp(1.45rem, 3vw, 2.25rem) !important;
+  overflow-wrap: anywhere;
+}
+
+.compactSearch {
+  grid-template-columns: minmax(220px, 360px) auto;
+}
+
+@media (max-width: 700px) {
+  .compactSearch {
+    grid-template-columns: 1fr;
+  }
+}
