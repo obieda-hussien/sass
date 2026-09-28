@@ -145,12 +145,12 @@ private fun LoginScreen(vm: AppViewModel) {
                 )
                 OutlinedTextField(
                     value = vm.passwordInput,
-                    onValueChange = { value -> vm.passwordInput = value.filter(Char::isDigit).take(10) },
-                    label = { Text("6–10 digit PIN") },
+                    onValueChange = { value -> vm.passwordInput = value.take(128) },
+                    label = { Text("PIN / password") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                 )
                 TextButton(
                     onClick = vm::forgotPassword,
@@ -162,7 +162,7 @@ private fun LoginScreen(vm: AppViewModel) {
                 vm.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Button(
                     onClick = vm::login,
-                    enabled = !vm.busy && vm.usernameInput.isNotBlank() && vm.passwordInput.length in 6..10,
+                    enabled = !vm.busy && vm.usernameInput.isNotBlank() && vm.passwordInput.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (vm.busy) CircularProgressIndicator(Modifier.height(20.dp)) else Text("Sign in")
