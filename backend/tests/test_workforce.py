@@ -45,6 +45,8 @@ def test_employee_payroll_and_password_recovery(db):
     with db.begin():
         employee, generated = create_employee(db, req)
     assert generated
+    assert generated.isdigit()
+    assert len(generated) == 6
     assert verify_password(generated, employee.password_hash)
 
     attendance = AttendanceCreateRequest(
@@ -94,8 +96,9 @@ def test_employee_payroll_and_password_recovery(db):
         reset = request_password_reset(db, "picker@example.com")
     assert reset is not None
 
+    explicit_pin = "7" * 6
     with db.begin():
-        temporary = issue_temporary_password(db, reset, manager.id, "Temporary123!")
-    assert temporary == "Temporary123!"
-    assert verify_password("Temporary123!", employee.password_hash)
+        temporary = issue_temporary_password(db, reset, manager.id, explicit_pin)
+    assert temporary == explicit_pin
+    assert verify_password(explicit_pin, employee.password_hash)
     assert reset.status == "RESOLVED"
