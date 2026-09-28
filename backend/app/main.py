@@ -28,7 +28,7 @@ from .schemas import (
     ForgotPasswordRequest, HandoffRequest, PayAdjustmentCreateRequest, PerformanceEventCreateRequest, PromotionRequest,
     PickScanRequest, ReceiveRequest, RecoveryStowRequest, RefreshRequest, RejectOfferRequest,
     ShortPickRequest, StageRequest, SyncBatchRequest, TaskOfferRequest, TemporaryPasswordRequest,
-    UnpackScanRequest, UnpackStartRequest,
+    UnpackScanRequest, UnpackSourceRequest, UnpackStartRequest,
 )
 from .security import authenticate_access, hash_password, issue_session, refresh_session, verify_password
 from .seed import ensure_location, seed_bootstrap_users, seed_demo
@@ -39,7 +39,7 @@ from .services.picking import (
 )
 from .services.scheduling import active_task_for_actor, claim_next_task, reject_offer
 from .services.operations import (
-    OperationError, active_unpack, apply_cycle_count, boh_move, complete_unpack, damage_move, record_cycle_count,
+    OperationError, active_unpack, apply_cycle_count, bind_unpack_source, boh_move, complete_unpack, damage_move, record_cycle_count,
     scan_unpack, start_cycle_count, start_unpack, unpack_summary,
 )
 from .services.sla import board_target_seconds, effective_elapsed_seconds
@@ -867,7 +867,32 @@ def unpack_start(req: UnpackStartRequest, who=Depends(actor), db: Session = Depe
     user, device = who
     try:
         with db.begin():
-            session = start_unpack(db, req.temperature_class, user.id, device.id)
+            session = start_unpack(
+                db,
+                req.temperature_class,
+                user.id,
+                device.id,
+                source_ref=req.source_ref,
+                expected_items=[item.model_dump() for item in req.expected_items],
+            )
+            return unpack_summary(db, session)
+    except OperationError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.post("/unpack/sessions/{session_id}/source")
+def unpack_bind_source(
+    session_id: str,
+    req: UnpackSourceRequest,
+    who=Depends(actor),
+    db: Session = Depends(get_db),
+):
+    try:
+        with db.begin():
+            session = db.get(UnpackSession, session_id)
+            if not session:
+                raise HTTPException(404, "Unpack session not found")
+            bind_unpack_source(db, session, req.source_ref)
             return unpack_summary(db, session)
     except OperationError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
