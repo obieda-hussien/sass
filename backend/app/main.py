@@ -55,7 +55,7 @@ from .services.workforce import (
 from .telemetry import emit as emit_telemetry, ping as telemetry_ping
 from .ops_router import router as ops_router
 from .observability import configure_observability
-from .services.eventing import outbox_dispatch_loop, outbox_health
+from .services.eventing import enqueue_outbox, outbox_dispatch_loop, outbox_health
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -329,11 +329,16 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
     with db.begin():
         now = datetime.now(timezone.utc)
         device = db.get(Device, device.id)
+        previous_status = device.status
+        previous_telemetry = db.get(_models_ops.DeviceTelemetry, device.id)
+        previous_activity = previous_telemetry.activity if previous_telemetry else None
+        previous_connectivity = previous_telemetry.connectivity if previous_telemetry else None
+
         device.last_seen_at = now
         device.last_user_id = user.id
         device.status = req.connectivity.strip().upper()
         device.app_version = req.app_version or device.app_version
-        update_device_telemetry(
+        telemetry = update_device_telemetry(
             db,
             device.id,
             battery_percent=req.battery_percent,
@@ -345,6 +350,30 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
         current_task_id = active.id if active else None
         worker_state = get_worker_state(db, user.id, create=True)
         worker_state_name = worker_state.state if worker_state else "OFFLINE"
+
+        presence_changed = (
+            previous_status != device.status
+            or previous_connectivity != telemetry.connectivity
+            or previous_activity != telemetry.activity
+        )
+        if presence_changed:
+            enqueue_outbox(
+                db,
+                topic="device.presence.changed",
+                aggregate_type="DEVICE",
+                aggregate_id=device.id,
+                payload={
+                    "device_id": device.id,
+                    "user_id": user.id,
+                    "connectivity": telemetry.connectivity,
+                    "activity": telemetry.activity,
+                    "battery_percent": telemetry.battery_percent,
+                    "last_location_id": telemetry.last_location_id,
+                    "current_task_id": current_task_id,
+                    "worker_state": worker_state_name,
+                    "observed_at": now,
+                },
+            )
     mismatch = bool(req.current_task_id and req.current_task_id != current_task_id)
     emit_telemetry(
         "device_health",
