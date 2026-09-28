@@ -22,7 +22,8 @@ from .models import (
 from .schemas import (
     BOHMoveRequest, CancelRequest, CycleCountApplyRequest, CycleCountLineRequest, CycleCountStartRequest,
     DamageRequest, DowntimeRequest, HeartbeatRequest, InventoryMoveRequest, LoginRequest, OrderCreate,
-    AttendanceCreateRequest, ChangePasswordRequest, EmployeeCreateRequest, EmployeeUpdateRequest,
+    AttendanceCreateRequest, ChangePasswordRequest, CompleteFirstLoginRequest,
+    EmployeeCreateRequest, EmployeeUpdateRequest, AdminAccountUpdateRequest, AdminSetPinRequest, AdminDeactivateUserRequest,
     ForgotPasswordRequest, HandoffRequest, PayAdjustmentCreateRequest, PerformanceEventCreateRequest, PromotionRequest,
     PickScanRequest, ReceiveRequest, RecoveryStowRequest, RefreshRequest, RejectOfferRequest,
     ShortPickRequest, StageRequest, SyncBatchRequest, TaskOfferRequest, TemporaryPasswordRequest,
@@ -43,10 +44,12 @@ from .services.operations import (
 from .services.sla import board_target_seconds, effective_elapsed_seconds
 from .services.fulfillment import FulfillmentError, complete_delivery, handoff_task, stage_task, start_pack_rack
 from .services.ops_platform import get_worker_state, update_device_telemetry
+from .services.governance import audit_event
 from .services.workforce import (
     MANAGER_ROLES, WorkforceError, add_pay_adjustment, create_employee, employee_payload,
     issue_temporary_password, payroll_preview, promote_employee, record_attendance, record_performance,
-    request_password_reset, update_employee,
+    request_password_reset, update_employee, revoke_user_sessions, set_employee_pin,
+    soft_delete_employee, update_username, validate_numeric_pin,
 )
 from .telemetry import emit as emit_telemetry, ping as telemetry_ping
 from .ops_router import router as ops_router
@@ -98,16 +101,30 @@ if DASHBOARD_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(DASHBOARD_DIR)), name="static")
 
 
-def actor(authorization: str | None = Header(None), db: Session = Depends(get_db)) -> tuple[User, Device]:
+def authenticated_actor(
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+) -> tuple[User, Device]:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing bearer token")
     auth = authenticate_access(db, authorization[7:])
     if not auth:
         raise HTTPException(401, "Session expired or invalid")
     user, device = auth[0], auth[1]
-    # End the read-only authentication transaction so command handlers can open
-    # their explicit atomic transaction on the same request-scoped session.
     db.commit()
+    return user, device
+
+
+def actor(who=Depends(authenticated_actor)) -> tuple[User, Device]:
+    user, device = who
+    if user.must_change_password:
+        raise HTTPException(
+            428,
+            {
+                "code": "PASSWORD_CHANGE_REQUIRED",
+                "message": "Change the temporary PIN before using warehouse tools.",
+            },
+        )
     return user, device
 
 
