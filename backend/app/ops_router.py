@@ -498,6 +498,7 @@ def dispatch_workers(
                     "battery_percent": t.battery_percent,
                     "connectivity": t.connectivity,
                     "last_location_id": t.last_location_id,
+                    "activity": t.activity,
                     "updated_at": t.updated_at.isoformat(),
                 }
         row["full_name"] = profile.full_name if profile else user.username
