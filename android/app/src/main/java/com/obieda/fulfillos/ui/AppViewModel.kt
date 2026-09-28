@@ -124,7 +124,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 if (recovered == null) {
                     message = "Sign in to this trusted PDA"
                 } else {
-                    message = "Session restored on ${graph.deviceId}"
+                    message = if (task != null) "Active order restored" else "Online • waiting for orders"
                     if (task != null) installTask(task)
                 }
             }
@@ -177,7 +177,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     session = loggedIn
                     authenticated = true
                     passwordInput = ""
-                    message = "Signed in • ${loggedIn.username}"
+                    message = if (task != null) "Signed in • active order restored" else "Signed in • waiting for orders"
                     if (task != null) installTask(task) else screen = AppScreen.HOME
                 }
             }
@@ -214,53 +214,102 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     }
 
     fun claimNext() {
-        if (!authenticated || busy) return
-        busy = true
-        errorMessage = null
-        completionSummary = null
-        message = "Looking for work…"
+        pollWaitingOrders(manual = true)
+    }
+
+    private fun pollWaitingOrders(manual: Boolean = false) {
+        if (!authenticated || connectivity != ConnectivityState.ONLINE) return
+        if (busy && !manual) return
+        if (manual) {
+            busy = true
+            errorMessage = null
+            completionSummary = null
+            message = "Checking live order queue…"
+        }
+
         worker.execute {
-            // 1) Resume any direct assignment / active task owned by this picker.
             val activeResponse = callWithRefresh { graph.api.getActiveTask() }
-            var task = if (activeResponse.ok) {
+            val activeTask = if (activeResponse.ok) {
                 runCatching { graph.api.parseTaskEnvelope(activeResponse.body) }.getOrNull()
             } else null
 
-            // 2) Broadcast pool: every eligible picker can see the offer, but the
-            // backend atomically lets only the first successful accept own it.
-            if (task == null) {
-                val offersResponse = callWithRefresh { graph.api.getMyOffers() }
-                if (offersResponse.ok) {
-                    task = runCatching { graph.api.parseFirstOffer(offersResponse.body) }.getOrNull()
-                }
-            }
-
-            // 3) Compatibility fallback for READY work not yet broadcast.
-            var fallback: ApiClient.Result? = null
-            if (task == null) {
-                fallback = callWithRefresh { graph.api.claimNextTask() }
-                if (fallback.ok) {
-                    task = runCatching { graph.api.parseTaskEnvelope(fallback.body) }.getOrNull()
+            var offerResponse: ApiClient.Result? = null
+            var offeredTask: TaskSnapshot? = null
+            if (activeTask == null && activeResponse.code != 401) {
+                offerResponse = callWithRefresh { graph.api.getMyOffers() }
+                if (offerResponse.ok) {
+                    offeredTask = runCatching { graph.api.parseFirstOffer(offerResponse.body) }.getOrNull()
                 }
             }
 
             ui {
-                busy = false
-                val authFailed = activeResponse.code == 401 || fallback?.code == 401
-                if (authFailed) {
+                if (manual) busy = false
+                if (activeResponse.code == 401 || offerResponse?.code == 401) {
                     expireSession()
-                } else if (task == null) {
-                    currentTask = null
-                    message = "No orders available"
-                } else {
-                    installTask(task)
-                    message = when (task.taskStatus) {
-                        "OFFERED" -> "New order offered"
-                        "ACCEPTED", "PICKING" -> "Active order resumed"
-                        else -> "Order ready"
+                    return@ui
+                }
+
+                when {
+                    activeTask != null -> {
+                        val changed = currentTask?.taskId != activeTask.taskId ||
+                            currentTask?.serverVersion != activeTask.serverVersion
+                        if (changed) installTask(activeTask) else currentTask = activeTask
+                        message = when (activeTask.taskStatus) {
+                            "ACCEPTED", "PICKING" -> "Active order • server synced"
+                            "PICKED" -> "Pick complete • close bag"
+                            else -> "Active order synced"
+                        }
+                    }
+                    offeredTask != null -> {
+                        val isNew = currentTask?.taskId != offeredTask.taskId ||
+                            currentTask?.taskStatus != "OFFERED"
+                        if (isNew) {
+                            installTask(offeredTask)
+                            message = "New order offered • Accept or Reject"
+                        }
+                    }
+                    currentTask?.taskStatus == "OFFERED" -> {
+                        currentTask = null
+                        scanPhase = PickScanPhase.BIN
+                        if (screen == AppScreen.PICK) screen = AppScreen.HOME
+                        message = "Offer expired • waiting for orders"
+                    }
+                    currentTask == null -> {
+                        message = "Waiting for orders • auto-check every 3 seconds"
                     }
                 }
             }
+        }
+    }
+
+    private fun sendHeartbeat() {
+        if (!authenticated) return
+        val taskId = currentTask?.taskId
+        val location = lastLocationId
+        val activity = when {
+            currentTask != null -> "ORDER_${currentTask?.taskStatus ?: "ACTIVE"}"
+            screen == AppScreen.INVENTORY -> "INVENTORY_VIEW"
+            screen == AppScreen.UNPACK -> "UNPACK"
+            screen == AppScreen.BOH -> "BOH_MOVE"
+            screen == AppScreen.DAMAGE -> "DAMAGE"
+            screen == AppScreen.CYCLE_COUNT -> "CYCLE_COUNT"
+            screen == AppScreen.RECOVERY -> "RECOVERY"
+            screen == AppScreen.RECEIVE -> "RECEIVE"
+            screen == AppScreen.REPLENISHMENT -> "REPLENISHMENT"
+            else -> "WAITING_FOR_ORDER"
+        }
+        worker.execute {
+            val response = callWithRefresh {
+                graph.api.heartbeat(
+                    currentTaskId = taskId,
+                    appVersion = BuildConfig.VERSION_NAME,
+                    connectivity = connectivity.name,
+                    batteryPercent = graph.batteryPercent(),
+                    lastLocationId = location,
+                    activity = activity,
+                )
+            }
+            if (response.code == 401) ui { expireSession() }
         }
     }
 
@@ -571,6 +620,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 val scanned = canonicalLocation(value)
                 val expected = canonicalLocation(item.locationId)
                 if (scanned == expected) {
+                    lastLocationId = item.locationId
                     scanPhase = PickScanPhase.ITEM
                     message = "Bin confirmed • scan ${item.title}"
                 } else {
@@ -677,6 +727,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     }
 
     override fun onCleared() {
+        main.removeCallbacks(heartbeatRunnable)
+        main.removeCallbacks(offerPollRunnable)
         ScanBus.unsubscribe(scannerListener)
         worker.shutdownNow()
     }
