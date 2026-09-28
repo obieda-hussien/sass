@@ -5,6 +5,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -81,7 +89,11 @@ private fun ScanEntry(vm: AppViewModel, hint: String, enabled: Boolean = true) {
 
 @Composable
 fun UnpackScreen(vm: AppViewModel) {
-    OperationPage("Unpack", "Temperature-safe temporary tote → normal stow.", vm) {
+    OperationPage(
+        "Unpack",
+        "Verify the return bag against its expected manifest before it can close.",
+        vm,
+    ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("AMBIENT", "CHILLED", "FROZEN").forEach { temp ->
                 FilterChip(
@@ -91,34 +103,111 @@ fun UnpackScreen(vm: AppViewModel) {
                 )
             }
         }
+
         vm.unpackSummary?.let { summary ->
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Session ${summary.sessionId.take(8)}", fontWeight = FontWeight.Bold)
-                    Text("Temporary tote: ${summary.toteLocationId}")
-                    Text("Status: ${summary.status} · ${summary.temperatureClass}")
-                    summary.items.forEach {
-                        Text("${it.productId.take(10)} · ${it.qty} units · ${it.compatibleDestinations.size} stow options")
+            ElevatedCard(
+                Modifier.fillMaxWidth().animateContentSize(animationSpec = tween(160)),
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Icon(
+                            if (summary.manifestLocked) Icons.Filled.FactCheck else Icons.Filled.QrCodeScanner,
+                            contentDescription = null,
+                            modifier = Modifier.size(30.dp),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (summary.manifestLocked) "Manifest verification" else "Identify return bag",
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                summary.sourceRef ?: summary.toteLocationId,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        AssistChip(
+                            onClick = {},
+                            label = { Text(summary.temperatureClass) },
+                        )
+                    }
+
+                    if (summary.manifestLocked) {
+                        val progress = if (summary.expectedUnits <= 0) 0f
+                        else summary.verifiedUnits.toFloat() / summary.expectedUnits.toFloat()
+                        LinearProgressIndicator(
+                            progress = { progress.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(
+                                "${summary.verifiedUnits}/${summary.expectedUnits} verified",
+                                modifier = Modifier.weight(1f),
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text("${summary.remainingUnits} left")
+                        }
+
+                        summary.manifest.forEach { item ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(
+                                    if (item.missingQty == 0) Icons.Filled.CheckCircle else Icons.Filled.HourglassBottom,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(item.title, fontWeight = FontWeight.SemiBold)
+                                    item.asin?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                                }
+                                Text(
+                                    "${item.verifiedQty}/${item.expectedQty}",
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            "Scan the bag/SPOO first. FulfillOS must know what should be inside before item scanning starts.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
             }
-        }
-        OutlinedTextField(
-            value = vm.operationQtyInput,
-            onValueChange = { vm.operationQtyInput = it.filter(Char::isDigit).take(5) },
-            label = { Text("Quantity per scan") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        ScanEntry(vm, "Scan each item barcode. The event is durable before network transmission.")
-        Button(
-            onClick = vm::completeCurrentUnpack,
-            enabled = vm.unpackSummary?.status == "OPEN" && !vm.busy,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Icon(Icons.Filled.Done, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Finish")
+
+            if (!summary.manifestLocked) {
+                ScanEntry(vm, "Scan return bag / SPOO to load expected contents.")
+            } else if (!summary.completeReady) {
+                ScanEntry(vm, "Scan every physical item one by one. Missing or unexpected items cannot close the bag.")
+            } else {
+                ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(32.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Bag fully verified", fontWeight = FontWeight.Bold)
+                            Text("Every expected unit was scanned.", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+
+            Button(
+                onClick = vm::completeCurrentUnpack,
+                enabled = summary.status == "OPEN" && summary.completeReady && !vm.busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Filled.DoneAll, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (summary.completeReady) "Close verified bag" else "Finish locked")
+            }
         }
     }
 }
@@ -128,26 +217,123 @@ fun BohMoveScreen(vm: AppViewModel) {
     val hint = when (vm.operationScanPhase) {
         OperationScanPhase.SOURCE -> "Scan source bin"
         OperationScanPhase.ITEM -> "Scan item barcode"
-        OperationScanPhase.DESTINATION -> "Scan destination bin"
-        OperationScanPhase.SYNCING -> "Waiting for server ACK"
+        OperationScanPhase.DESTINATION -> "Scan new bin"
+        OperationScanPhase.SYNCING -> "Waiting for server"
     }
-    OperationPage("BOH Move", "Source → item → compatible destination.", vm) {
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(hint, fontWeight = FontWeight.Bold)
-                Text("Source: ${vm.operationSourceInput.ifBlank { "—" }}")
-                Text("Item: ${vm.operationProduct?.title ?: "—"}")
-                Text("Destination: ${vm.operationDestinationInput.ifBlank { "—" }}")
+    val phaseIndex = when (vm.operationScanPhase) {
+        OperationScanPhase.SOURCE -> 0
+        OperationScanPhase.ITEM -> 1
+        OperationScanPhase.DESTINATION -> 2
+        OperationScanPhase.SYNCING -> 3
+    }
+
+    OperationPage("BOH Move", "Scan → review → ✓. Nothing advances until you confirm it.", vm) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(
+                Triple("Bin", Icons.Filled.Inventory2, 0),
+                Triple("Item", Icons.Filled.QrCodeScanner, 1),
+                Triple("New bin", Icons.Filled.MoveToInbox, 2),
+            ).forEach { (label, icon, index) ->
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp),
+                    tonalElevation = if (phaseIndex == index) 4.dp else 0.dp,
+                ) {
+                    Column(
+                        Modifier.padding(vertical = 10.dp),
+                        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            if (phaseIndex > index) Icons.Filled.CheckCircle else icon,
+                            contentDescription = label,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
+
+        AnimatedContent(
+            targetState = vm.operationScanPhase to vm.operationAwaitingConfirmation,
+            transitionSpec = {
+                (fadeIn(tween(110)) + slideInHorizontally(tween(150)) { it / 10 }) togetherWith
+                    (fadeOut(tween(80)) + slideOutHorizontally(tween(110)) { -it / 12 })
+            },
+            label = "boh-step",
+        ) { (phase, awaiting) ->
+            ElevatedCard(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Icon(
+                            when (phase) {
+                                OperationScanPhase.SOURCE -> Icons.Filled.Inventory2
+                                OperationScanPhase.ITEM -> Icons.Filled.QrCodeScanner
+                                OperationScanPhase.DESTINATION -> Icons.Filled.MoveToInbox
+                                OperationScanPhase.SYNCING -> Icons.Filled.Sync
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(30.dp),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(hint, fontWeight = FontWeight.Bold)
+                            Text(
+                                when (phase) {
+                                    OperationScanPhase.SOURCE -> vm.operationSourceInput.ifBlank { "Waiting for source bin" }
+                                    OperationScanPhase.ITEM -> vm.operationProduct?.title ?: "Waiting for item"
+                                    OperationScanPhase.DESTINATION -> vm.operationDestinationInput.ifBlank { "Waiting for new bin" }
+                                    OperationScanPhase.SYNCING -> "Inventory move is being confirmed"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+
+                    if (awaiting) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedButton(
+                                onClick = vm::rescanBohStep,
+                                enabled = !vm.busy,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Filled.Refresh, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Rescan")
+                            }
+                            Button(
+                                onClick = vm::confirmBohStep,
+                                enabled = !vm.busy,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Filled.Check, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Confirm")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         OutlinedTextField(
             value = vm.operationQtyInput,
             onValueChange = { vm.operationQtyInput = it.filter(Char::isDigit).take(5) },
             label = { Text("Move quantity") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
+            leadingIcon = { Icon(Icons.Filled.Numbers, contentDescription = null) },
         )
-        ScanEntry(vm, hint, enabled = vm.operationScanPhase != OperationScanPhase.SYNCING)
+
+        if (!vm.operationAwaitingConfirmation && vm.operationScanPhase != OperationScanPhase.SYNCING) {
+            ScanEntry(vm, hint)
+        }
+        if (vm.operationScanPhase == OperationScanPhase.SYNCING) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
     }
 }
 
