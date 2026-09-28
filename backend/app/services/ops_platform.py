@@ -1163,7 +1163,8 @@ def shortage_side_effects(
                 ),
             )
             db.add(alert)
-            db.add(OperationalIncident(
+            db.flush()
+            incident = OperationalIncident(
                 incident_type="REPEATED_SHORTAGE",
                 severity="HIGH",
                 site_id=(db.get(Location, item.source_location_id).site_id if db.get(Location, item.source_location_id) else "DEMO"),
@@ -1178,7 +1179,24 @@ def shortage_side_effects(
                     },
                     separators=(",", ":"),
                 ),
-            ))
+            )
+            db.add(incident)
+            db.flush()
+            enqueue_outbox(
+                db,
+                topic="incident.created",
+                aggregate_type="OPERATIONAL_INCIDENT",
+                aggregate_id=incident.id,
+                payload={
+                    "incident_type": incident.incident_type,
+                    "severity": incident.severity,
+                    "site_id": incident.site_id,
+                    "scope_type": incident.scope_type,
+                    "scope_value": incident.scope_value,
+                    "source_ref": incident.source_ref,
+                    "details": json.loads(incident.details_json),
+                },
+            )
 
     existing_replenishment = db.scalar(
         select(ReplenishmentTask).where(
