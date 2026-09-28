@@ -14,6 +14,8 @@ import {
   getShiftTemplates,
   issueTemporaryPassword,
   managerLogin,
+  getWebSession,
+  managerLogout,
   promoteEmployee,
   type Employee,
   type PasswordResetItem,
@@ -89,6 +91,7 @@ function money(cents: number, currency = "EGP") {
 
 export default function PeoplePage() {
   const [token, setToken] = useState("");
+  const [authChecking, setAuthChecking] = useState(true);
   const [loginUser, setLoginUser] = useState("supervisor");
   const [loginPassword, setLoginPassword] = useState("");
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -136,8 +139,16 @@ export default function PeoplePage() {
   });
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("fulfillos_admin_token");
-    if (saved) setToken(saved);
+    void getWebSession()
+      .then((session) => {
+        if (
+          session.authenticated &&
+          ["SUPERVISOR", "ADMIN"].includes(session.role.toUpperCase())
+        ) {
+          setToken("session");
+        }
+      })
+      .finally(() => setAuthChecking(false));
   }, []);
 
   async function refresh(activeToken = token) {
@@ -182,8 +193,7 @@ export default function PeoplePage() {
       if (!["SUPERVISOR", "ADMIN"].includes(result.role.toUpperCase())) {
         throw new Error("Supervisor or admin role required");
       }
-      window.localStorage.setItem("fulfillos_admin_token", result.access_token);
-      setToken(result.access_token);
+      setToken("session");
       setLoginPassword("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Login failed");
@@ -432,6 +442,10 @@ export default function PeoplePage() {
     );
   }, [employees]);
 
+  if (authChecking) {
+    return <main className="shell peopleShell"><section className="panel authPanel">Checking secure session…</section></main>;
+  }
+
   if (!token) {
     return (
       <main className="shell peopleShell">
@@ -485,7 +499,7 @@ export default function PeoplePage() {
           <button onClick={() => void refresh()} disabled={busy}>Refresh</button>
           <button
             onClick={() => {
-              window.localStorage.removeItem("fulfillos_admin_token");
+              void managerLogout();
               setToken("");
               setEmployees([]);
             }}
