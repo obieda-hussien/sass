@@ -1264,7 +1264,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         }
     }
 
-    fun setReceiveAdhocMode(enabled: Boolean) {
+    fun chooseReceiveAdhocMode(enabled: Boolean) {
         receiveAdhocMode = enabled
         receiveProduct = null
         receiveAdhocDestination = ""

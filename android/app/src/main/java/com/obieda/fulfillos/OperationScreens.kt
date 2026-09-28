@@ -526,10 +526,10 @@ fun ReceiveScreen(vm: AppViewModel) {
             if (selected.status == "RECEIVING") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = !vm.receiveAdhocMode,
-                        onClick = { vm.setReceiveAdhocMode(false) },
+                        onClick = { vm.chooseReceiveAdhocMode(false) },
                         label = { Text("Planned receipt") })
                     FilterChip(selected = vm.receiveAdhocMode,
-                        onClick = { vm.setReceiveAdhocMode(true) },
+                        onClick = { vm.chooseReceiveAdhocMode(true) },
                         label = { Text("Ad hoc direct stow") })
                 }
                 vm.receiveProduct?.let { product ->
