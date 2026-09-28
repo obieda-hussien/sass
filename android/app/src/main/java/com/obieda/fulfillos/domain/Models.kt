@@ -77,7 +77,7 @@ data class InventoryLookup(
 )
 
 enum class ConnectivityState { ONLINE, OFFLINE, RECONNECTING }
-enum class AppScreen { HOME, PICK, INVENTORY, UNPACK, BOH, DAMAGE, CYCLE_COUNT, RECOVERY, RECEIVE, REPLENISHMENT }
+enum class AppScreen { HOME, ACTIVITY, PICK, INVENTORY, UNPACK, BOH, DAMAGE, CYCLE_COUNT, RECOVERY, RECEIVE, REPLENISHMENT }
 enum class PickScanPhase { BIN, ITEM, SYNCING, DONE }
 
 
