@@ -1474,24 +1474,51 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     }
 
     private fun handleBohScan(value: String) {
+        if (operationAwaitingConfirmation) {
+            message = "Confirm ✓ or rescan before continuing"
+            return
+        }
         when (operationScanPhase) {
             OperationScanPhase.SOURCE -> {
                 operationSourceInput = canonicalLocation(value)
                 lastLocationId = operationSourceInput
-                operationScanPhase = OperationScanPhase.ITEM
-                message = "Source ${operationSourceInput} • scan item"
-                requestCameraScan("Scan item barcode")
+                operationAwaitingConfirmation = true
+                message = "Check source ${operationSourceInput} • tap ✓"
             }
             OperationScanPhase.ITEM -> resolveBarcode(value) { product ->
                 operationProduct = product
+                operationAwaitingConfirmation = true
+                message = "Check ${product.title} • tap ✓"
+            }
+            OperationScanPhase.DESTINATION -> {
+                operationDestinationInput = canonicalLocation(value)
+                operationAwaitingConfirmation = true
+                message = "Check destination ${operationDestinationInput} • tap ✓"
+            }
+            OperationScanPhase.SYNCING -> message = "Waiting for server confirmation"
+        }
+    }
+
+    fun confirmBohStep() {
+        if (!operationAwaitingConfirmation || busy) return
+        when (operationScanPhase) {
+            OperationScanPhase.SOURCE -> {
+                operationAwaitingConfirmation = false
+                operationScanPhase = OperationScanPhase.ITEM
+                message = "Source confirmed • scan item"
+                requestCameraScan("Scan item barcode")
+            }
+            OperationScanPhase.ITEM -> {
+                if (operationProduct == null) return
+                operationAwaitingConfirmation = false
                 operationScanPhase = OperationScanPhase.DESTINATION
-                message = "${product.title} • scan destination bin"
+                message = "Item confirmed • scan new bin"
                 requestCameraScan("Scan destination bin")
             }
             OperationScanPhase.DESTINATION -> {
                 val product = operationProduct ?: return
-                operationDestinationInput = canonicalLocation(value)
                 val qty = operationQtyInput.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                operationAwaitingConfirmation = false
                 operationScanPhase = OperationScanPhase.SYNCING
                 graph.operations.enqueue(
                     kind = PendingOperationEvent.Kind.BOH_MOVE,
@@ -1501,10 +1528,28 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     destinationLocationId = operationDestinationInput,
                     onResult = ::handleOperationSync,
                 )
-                message = "BOH move persisted • awaiting ACK"
+                message = "Move submitted • waiting for server ✓"
             }
-            OperationScanPhase.SYNCING -> message = "Waiting for server confirmation"
+            OperationScanPhase.SYNCING -> Unit
         }
+    }
+
+    fun rescanBohStep() {
+        if (busy || operationScanPhase == OperationScanPhase.SYNCING) return
+        when (operationScanPhase) {
+            OperationScanPhase.SOURCE -> operationSourceInput = ""
+            OperationScanPhase.ITEM -> operationProduct = null
+            OperationScanPhase.DESTINATION -> operationDestinationInput = ""
+            OperationScanPhase.SYNCING -> Unit
+        }
+        operationAwaitingConfirmation = false
+        message = when (operationScanPhase) {
+            OperationScanPhase.SOURCE -> "Rescan source bin"
+            OperationScanPhase.ITEM -> "Rescan item barcode"
+            OperationScanPhase.DESTINATION -> "Rescan destination bin"
+            OperationScanPhase.SYNCING -> "Waiting for server"
+        }
+        requestCameraForCurrentContext()
     }
 
     private fun handleDamageScan(value: String) {
