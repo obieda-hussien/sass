@@ -130,6 +130,15 @@ def ops_actor(
     if not auth:
         raise HTTPException(401, "Session expired or invalid")
     user, device = auth[0], auth[1]
+    if user.must_change_password:
+        db.commit()
+        raise HTTPException(
+            428,
+            {
+                "code": "PASSWORD_CHANGE_REQUIRED",
+                "message": "Change the temporary PIN before using warehouse tools.",
+            },
+        )
     db.commit()
     return user, device
 
