@@ -1006,7 +1006,12 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 busy = false
                 if (updated != null) {
                     selectedShipment = updated
-                    message = "Receiving ${updated.label} • scan item barcode"
+                    message = if (updated.status == "STOWING") {
+                        "Stow ${updated.label} • scan destination"
+                    } else {
+                        "Receiving ${updated.label} • scan item barcode"
+                    }
+                    requestCameraForCurrentContext()
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -1044,6 +1049,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     receiveDamagedQtyInput = "0"
                     message = "Receipt saved • scan next item"
                     refreshSelectedShipment()
+                    requestCameraScan("Scan next received product barcode")
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -1063,6 +1069,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 if (updated != null) {
                     selectedShipment = updated
                     message = "Receiving complete • stow tasks ready"
+                    requestCameraForCurrentContext()
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -1084,6 +1091,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     selectedStowTaskId = null
                     stowDestinationInput = ""
                     refreshSelectedShipment()
+                    main.postDelayed({ requestCameraForCurrentContext() }, 250L)
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
