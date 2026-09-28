@@ -58,6 +58,12 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         private set
     var scannedValue by mutableStateOf("")
         private set
+    var appForeground by mutableStateOf(false)
+        private set
+    var cameraRequestId by mutableStateOf(0)
+        private set
+    var cameraRequestHint by mutableStateOf("Scan barcode")
+        private set
 
     var screen by mutableStateOf(AppScreen.HOME)
         private set
@@ -132,14 +138,14 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
-            if (authenticated && session?.mustChangePassword != true) sendHeartbeat()
+            if (appForeground && authenticated && session?.mustChangePassword != true) sendHeartbeat()
             main.postDelayed(this, heartbeatIntervalMs)
         }
     }
 
     private val offerPollRunnable = object : Runnable {
         override fun run() {
-            if (authenticated && session?.mustChangePassword != true && connectivity == ConnectivityState.ONLINE && !busy) {
+            if (appForeground && authenticated && session?.mustChangePassword != true && connectivity == ConnectivityState.ONLINE && !busy) {
                 pollWaitingOrders()
             }
             main.postDelayed(this, offerPollIntervalMs)
@@ -190,6 +196,97 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 }
             }
         }
+    }
+
+    fun onAppForegrounded() {
+        appForeground = true
+        if (!authenticated || session?.mustChangePassword == true) return
+        sendHeartbeat(forceConnectivity = "ONLINE", activityOverride = currentPresenceActivity())
+        if (connectivity == ConnectivityState.ONLINE && !busy) {
+            pollWaitingOrders()
+        }
+        requestCameraForCurrentContext()
+    }
+
+    fun onAppBackgrounded() {
+        if (!appForeground) return
+        appForeground = false
+        if (authenticated && session?.mustChangePassword != true) {
+            sendHeartbeat(forceConnectivity = "OFFLINE", activityOverride = "APP_BACKGROUND")
+        }
+    }
+
+    fun requestCameraScan(hint: String) {
+        if (!authenticated || session?.mustChangePassword == true || !appForeground) return
+        cameraRequestHint = hint
+        cameraRequestId += 1
+    }
+
+    private fun requestCameraForCurrentContext() {
+        val task = currentTask
+        when (screen) {
+            AppScreen.PICK -> when {
+                task == null || task.taskStatus == "OFFERED" || task.recoveryRequired -> Unit
+                task.taskStatus == "PICKED" || scanPhase == PickScanPhase.DONE ->
+                    requestCameraScan("Scan bag / SPOO barcode")
+                scanPhase == PickScanPhase.BIN ->
+                    requestCameraScan("Scan bin " + (task.currentItem?.locationId ?: ""))
+                scanPhase == PickScanPhase.ITEM ->
+                    requestCameraScan("Scan " + (task.currentItem?.title ?: "item") + " barcode")
+                else -> Unit
+            }
+            AppScreen.INVENTORY -> requestCameraScan("Scan a bin or item barcode")
+            AppScreen.UNPACK -> if (unpackSummary?.status == "OPEN") requestCameraScan("Scan unpack item barcode")
+            AppScreen.BOH -> when (operationScanPhase) {
+                OperationScanPhase.SOURCE -> requestCameraScan("Scan source bin")
+                OperationScanPhase.ITEM -> requestCameraScan("Scan item barcode")
+                OperationScanPhase.DESTINATION -> requestCameraScan("Scan destination bin")
+                OperationScanPhase.SYNCING -> Unit
+            }
+            AppScreen.DAMAGE -> when (operationScanPhase) {
+                OperationScanPhase.SOURCE -> requestCameraScan("Scan source bin")
+                OperationScanPhase.ITEM -> requestCameraScan("Scan damaged item barcode")
+                else -> Unit
+            }
+            AppScreen.CYCLE_COUNT -> when {
+                cycleCountSessionId == null -> requestCameraScan("Scan bin to start count")
+                cycleCountProduct == null -> requestCameraScan("Scan item barcode to count")
+                else -> Unit
+            }
+            AppScreen.RECOVERY -> when {
+                recoverySummary == null -> requestCameraScan("Scan recovery task ID")
+                recoverySummary?.items?.isNotEmpty() == true -> requestCameraScan("Scan recovery destination bin")
+                else -> Unit
+            }
+            AppScreen.RECEIVE -> when {
+                selectedShipment == null -> requestCameraScan("Scan shipment label or ID")
+                selectedShipment?.status == "RECEIVING" && receiveProduct == null ->
+                    requestCameraScan("Scan received product barcode")
+                selectedShipment?.status == "STOWING" || selectedStowTaskId != null ->
+                    requestCameraScan("Scan stow destination bin")
+                else -> Unit
+            }
+            AppScreen.REPLENISHMENT -> when (replenishmentPhase) {
+                ReplenishmentScanPhase.SOURCE -> if (activeReplenishment != null) requestCameraScan("Scan replenishment source bin")
+                ReplenishmentScanPhase.ITEM -> if (activeReplenishment != null) requestCameraScan("Scan replenishment item")
+                ReplenishmentScanPhase.DESTINATION -> if (activeReplenishment != null) requestCameraScan("Scan replenishment destination")
+                ReplenishmentScanPhase.COMPLETE -> Unit
+            }
+            AppScreen.HOME -> Unit
+        }
+    }
+
+    private fun currentPresenceActivity(): String = when {
+        currentTask != null -> "ORDER_" + (currentTask?.taskStatus ?: "ACTIVE")
+        screen == AppScreen.INVENTORY -> "INVENTORY_VIEW"
+        screen == AppScreen.UNPACK -> "UNPACK"
+        screen == AppScreen.BOH -> "BOH_MOVE"
+        screen == AppScreen.DAMAGE -> "DAMAGE"
+        screen == AppScreen.CYCLE_COUNT -> "CYCLE_COUNT"
+        screen == AppScreen.RECOVERY -> "RECOVERY"
+        screen == AppScreen.RECEIVE -> "RECEIVE"
+        screen == AppScreen.REPLENISHMENT -> "REPLENISHMENT"
+        else -> "WAITING_FOR_ORDER"
     }
 
     fun forgotPassword() {
@@ -383,28 +480,21 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         }
     }
 
-    private fun sendHeartbeat() {
+    private fun sendHeartbeat(
+        forceConnectivity: String? = null,
+        activityOverride: String? = null,
+    ) {
         if (!authenticated) return
         val taskId = currentTask?.taskId
         val location = lastLocationId
-        val activity = when {
-            currentTask != null -> "ORDER_${currentTask?.taskStatus ?: "ACTIVE"}"
-            screen == AppScreen.INVENTORY -> "INVENTORY_VIEW"
-            screen == AppScreen.UNPACK -> "UNPACK"
-            screen == AppScreen.BOH -> "BOH_MOVE"
-            screen == AppScreen.DAMAGE -> "DAMAGE"
-            screen == AppScreen.CYCLE_COUNT -> "CYCLE_COUNT"
-            screen == AppScreen.RECOVERY -> "RECOVERY"
-            screen == AppScreen.RECEIVE -> "RECEIVE"
-            screen == AppScreen.REPLENISHMENT -> "REPLENISHMENT"
-            else -> "WAITING_FOR_ORDER"
-        }
+        val activity = activityOverride ?: currentPresenceActivity()
+        val presence = forceConnectivity ?: if (appForeground) connectivity.name else "OFFLINE"
         worker.execute {
             val response = callWithRefresh {
                 graph.api.heartbeat(
                     currentTaskId = taskId,
                     appVersion = BuildConfig.VERSION_NAME,
-                    connectivity = connectivity.name,
+                    connectivity = presence,
                     batteryPercent = graph.batteryPercent(),
                     lastLocationId = location,
                     activity = activity,
