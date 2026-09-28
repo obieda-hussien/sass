@@ -1106,14 +1106,192 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 lookupInventory(inventoryQuery)
             }
             AppScreen.PICK -> handlePickScan(value)
+            AppScreen.UNPACK -> handleUnpackScan(value)
+            AppScreen.BOH -> handleBohScan(value)
+            AppScreen.DAMAGE -> handleDamageScan(value)
+            AppScreen.CYCLE_COUNT -> handleCycleCountScan(value)
+            AppScreen.RECOVERY -> handleRecoveryScan(value)
+            AppScreen.RECEIVE -> handleReceiveScan(value)
+            AppScreen.REPLENISHMENT -> handleReplenishmentScan(value)
             AppScreen.HOME -> message = "Scan received • open a tool to use it"
-            AppScreen.UNPACK,
-            AppScreen.BOH,
-            AppScreen.DAMAGE,
-            AppScreen.CYCLE_COUNT,
-            AppScreen.RECOVERY,
-            AppScreen.RECEIVE,
-            AppScreen.REPLENISHMENT -> message = "Scan received • operation screen is not active yet"
+        }
+    }
+
+    private fun handleUnpackScan(value: String) {
+        val unpack = unpackSummary ?: run {
+            startOrResumeUnpack()
+            return
+        }
+        if (unpack.status != "OPEN") {
+            message = "Start a new unpack session first"
+            return
+        }
+        resolveBarcode(value) { product ->
+            operationProduct = product
+            graph.operations.enqueue(
+                kind = PendingOperationEvent.Kind.UNPACK_SCAN,
+                resourceId = unpack.sessionId,
+                productId = product.productId,
+                qty = operationQtyInput.toIntOrNull()?.coerceAtLeast(1) ?: 1,
+                onResult = ::handleOperationSync,
+            )
+            message = "Unpack scan persisted • awaiting ACK"
+        }
+    }
+
+    private fun handleBohScan(value: String) {
+        when (operationScanPhase) {
+            OperationScanPhase.SOURCE -> {
+                operationSourceInput = canonicalLocation(value)
+                lastLocationId = operationSourceInput
+                operationScanPhase = OperationScanPhase.ITEM
+                message = "Source ${operationSourceInput} • scan item"
+            }
+            OperationScanPhase.ITEM -> resolveBarcode(value) { product ->
+                operationProduct = product
+                operationScanPhase = OperationScanPhase.DESTINATION
+                message = "${product.title} • scan destination bin"
+            }
+            OperationScanPhase.DESTINATION -> {
+                val product = operationProduct ?: return
+                operationDestinationInput = canonicalLocation(value)
+                val qty = operationQtyInput.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                operationScanPhase = OperationScanPhase.SYNCING
+                graph.operations.enqueue(
+                    kind = PendingOperationEvent.Kind.BOH_MOVE,
+                    productId = product.productId,
+                    qty = qty,
+                    sourceLocationId = operationSourceInput,
+                    destinationLocationId = operationDestinationInput,
+                    onResult = ::handleOperationSync,
+                )
+                message = "BOH move persisted • awaiting ACK"
+            }
+            OperationScanPhase.SYNCING -> message = "Waiting for server confirmation"
+        }
+    }
+
+    private fun handleDamageScan(value: String) {
+        when (operationScanPhase) {
+            OperationScanPhase.SOURCE -> {
+                operationSourceInput = canonicalLocation(value)
+                lastLocationId = operationSourceInput
+                operationScanPhase = OperationScanPhase.ITEM
+                message = "Source ${operationSourceInput} • scan damaged item"
+            }
+            OperationScanPhase.ITEM -> resolveBarcode(value) { product ->
+                operationProduct = product
+                operationScanPhase = OperationScanPhase.SYNCING
+                graph.operations.enqueue(
+                    kind = PendingOperationEvent.Kind.DAMAGE,
+                    productId = product.productId,
+                    qty = operationQtyInput.toIntOrNull()?.coerceAtLeast(1) ?: 1,
+                    sourceLocationId = operationSourceInput,
+                    reason = operationReasonInput.ifBlank { "DAMAGED" },
+                    onResult = ::handleOperationSync,
+                )
+                message = "Damage move persisted • awaiting ACK"
+            }
+            OperationScanPhase.DESTINATION -> Unit
+            OperationScanPhase.SYNCING -> message = "Waiting for server confirmation"
+        }
+    }
+
+    private fun handleCycleCountScan(value: String) {
+        if (cycleCountSessionId == null) {
+            cycleCountLocation = canonicalLocation(value)
+            startCycleCount(cycleCountLocation)
+            return
+        }
+        resolveBarcode(value) { product ->
+            cycleCountProduct = product
+            cycleCountQtyInput = "0"
+            message = "${product.title} • enter physical count"
+        }
+    }
+
+    private fun handleRecoveryScan(value: String) {
+        val summary = recoverySummary
+        if (summary == null) {
+            recoveryTaskIdInput = value.trim()
+            loadRecovery(recoveryTaskIdInput)
+            return
+        }
+        val item = summary.items.firstOrNull() ?: run {
+            message = "Recovery is already complete"
+            return
+        }
+        val destination = canonicalLocation(value)
+        if (item.compatibleDestinations.isNotEmpty() && destination !in item.compatibleDestinations) {
+            errorMessage = "Destination is not compatible for ${item.title}"
+            return
+        }
+        graph.operations.enqueue(
+            kind = PendingOperationEvent.Kind.RECOVERY_STOW,
+            resourceId = summary.taskId,
+            productId = item.productId,
+            qty = item.qty,
+            sourceLocationId = item.sourceLocationId,
+            destinationLocationId = destination,
+            onResult = ::handleOperationSync,
+        )
+        message = "Recovery stow persisted • awaiting ACK"
+    }
+
+    private fun handleReceiveScan(value: String) {
+        if (selectedShipment == null) {
+            val needle = value.trim().uppercase()
+            val match = shipments.firstOrNull {
+                it.id.equals(needle, true) || it.label.equals(needle, true)
+            }
+            if (match != null) selectShipment(match)
+            else errorMessage = "Choose a shipment first"
+            return
+        }
+        resolveBarcode(value) { product ->
+            receiveProduct = product
+            message = "${product.title} • confirm good/damaged quantity"
+        }
+    }
+
+    private fun handleReplenishmentScan(value: String) {
+        val task = activeReplenishment ?: run {
+            message = "Claim a replenishment task first"
+            return
+        }
+        if (busy) return
+        busy = true
+        worker.execute {
+            val response = when (replenishmentPhase) {
+                ReplenishmentScanPhase.SOURCE -> callWithRefresh {
+                    graph.api.scanReplenishmentSource(task.id, UUID.randomUUID().toString(), value)
+                }
+                ReplenishmentScanPhase.ITEM -> callWithRefresh {
+                    graph.api.scanReplenishmentItem(task.id, UUID.randomUUID().toString(), value)
+                }
+                ReplenishmentScanPhase.DESTINATION -> callWithRefresh {
+                    graph.api.scanReplenishmentDestination(task.id, UUID.randomUUID().toString(), value)
+                }
+                ReplenishmentScanPhase.COMPLETE -> ApiClient.Result(409, "{\"detail\":\"Confirm quantity to complete\"}")
+            }
+            val updated = if (response.ok) runCatching {
+                graph.api.parseReplenishmentEnvelope(response.body)
+            }.getOrNull() else null
+            ui {
+                busy = false
+                if (updated != null) {
+                    activeReplenishment = updated
+                    syncReplenishmentPhase(updated)
+                    message = when (replenishmentPhase) {
+                        ReplenishmentScanPhase.SOURCE -> "Scan source ${updated.sourceLocationId}"
+                        ReplenishmentScanPhase.ITEM -> "Source confirmed • scan item barcode"
+                        ReplenishmentScanPhase.DESTINATION -> "Item confirmed • scan ${updated.destinationLocationId}"
+                        ReplenishmentScanPhase.COMPLETE -> "Destination confirmed • enter actual quantity"
+                    }
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
         }
     }
 
