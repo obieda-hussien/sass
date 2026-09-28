@@ -114,13 +114,13 @@ private fun FulfillApp(vm: AppViewModel) {
                 AppScreen.HOME -> HomeScreen(vm)
                 AppScreen.PICK -> PickScreen(vm)
                 AppScreen.INVENTORY -> InventoryScreen(vm)
-                AppScreen.UNPACK,
-                AppScreen.BOH,
-                AppScreen.DAMAGE,
-                AppScreen.CYCLE_COUNT,
-                AppScreen.RECOVERY,
-                AppScreen.RECEIVE,
-                AppScreen.REPLENISHMENT -> HomeScreen(vm)
+                AppScreen.UNPACK -> UnpackScreen(vm)
+                AppScreen.BOH -> BohMoveScreen(vm)
+                AppScreen.DAMAGE -> DamageScreen(vm)
+                AppScreen.CYCLE_COUNT -> CycleCountScreen(vm)
+                AppScreen.RECOVERY -> RecoveryScreen(vm)
+                AppScreen.RECEIVE -> ReceiveScreen(vm)
+                AppScreen.REPLENISHMENT -> ReplenishmentScreen(vm)
             }
         }
     }
@@ -201,12 +201,12 @@ private fun LoginScreen(vm: AppViewModel) {
                 )
                 OutlinedTextField(
                     value = vm.passwordInput,
-                    onValueChange = { value -> vm.passwordInput = value.take(128) },
-                    label = { Text("PIN / password") },
+                    onValueChange = { value -> vm.passwordInput = value.filter(Char::isDigit).take(10) },
+                    label = { Text("6–10 digit PIN") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
                 )
                 TextButton(
                     onClick = vm::forgotPassword,
@@ -218,7 +218,7 @@ private fun LoginScreen(vm: AppViewModel) {
                 vm.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Button(
                     onClick = vm::login,
-                    enabled = !vm.busy && vm.usernameInput.isNotBlank() && vm.passwordInput.isNotBlank(),
+                    enabled = !vm.busy && vm.usernameInput.isNotBlank() && vm.passwordInput.length in 6..10,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (vm.busy) CircularProgressIndicator(Modifier.height(20.dp)) else Text("Sign in")
@@ -284,28 +284,34 @@ private fun HomeScreen(vm: AppViewModel) {
             }
         }
 
-        Text("Backend modules", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text("Warehouse tools", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            PlannedModule("Unpack", Modifier.weight(1f))
-            PlannedModule("BOH Move", Modifier.weight(1f))
+            OperationModule("Unpack", "Returns / inbound tote", vm::openUnpack, Modifier.weight(1f))
+            OperationModule("BOH Move", "Bin → bin", vm::openBoh, Modifier.weight(1f))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            PlannedModule("DMG", Modifier.weight(1f))
-            PlannedModule("Cycle Count", Modifier.weight(1f))
+            OperationModule("Damage", "Move to DMG", vm::openDamage, Modifier.weight(1f))
+            OperationModule("Cycle Count", "Physical reconcile", vm::openCycleCount, Modifier.weight(1f))
         }
-        Text(
-            "The backend already supports these flows; dedicated PDA screens are the next UI slice.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OperationModule("Receive", "Shipment + stow", vm::openReceive, Modifier.weight(1f))
+            OperationModule("Replenish", "Reserve → pick face", vm::openReplenishment, Modifier.weight(1f))
+        }
+        OperationModule("Recovery", "Cancelled/exception stock", vm::openRecovery, Modifier.fillMaxWidth())
     }
 }
 
 @Composable
-private fun PlannedModule(name: String, modifier: Modifier = Modifier) {
-    Card(modifier) {
-        Column(Modifier.padding(14.dp)) {
+private fun OperationModule(
+    name: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ElevatedCard(onClick = onClick, modifier = modifier) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(name, fontWeight = FontWeight.SemiBold)
-            Text("API ready", style = MaterialTheme.typography.labelSmall)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
