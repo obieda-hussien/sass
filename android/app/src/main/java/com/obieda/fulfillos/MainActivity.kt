@@ -83,6 +83,11 @@ private fun FulfillApp(vm: AppViewModel) {
         return
     }
 
+    if (vm.session?.mustChangePassword == true) {
+        ForcePersonalPinScreen(vm)
+        return
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -120,6 +125,57 @@ private fun FulfillApp(vm: AppViewModel) {
         }
     }
 }
+
+@Composable
+private fun ForcePersonalPinScreen(vm: AppViewModel) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+            Column(
+                Modifier.padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text("Create your personal PIN", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "This is your first sign-in with a temporary PIN. Choose a private 6–10 digit PIN you can remember. Warehouse tools stay locked until this is complete.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = vm.newPinInput,
+                    onValueChange = { value -> vm.newPinInput = value.filter(Char::isDigit).take(10) },
+                    label = { Text("New PIN") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Next),
+                )
+                OutlinedTextField(
+                    value = vm.confirmPinInput,
+                    onValueChange = { value -> vm.confirmPinInput = value.filter(Char::isDigit).take(10) },
+                    label = { Text("Confirm PIN") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                )
+                Text("6–10 digits only. Do not share it with coworkers.", style = MaterialTheme.typography.bodySmall)
+                vm.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                Button(
+                    onClick = vm::completeFirstLoginPin,
+                    enabled = !vm.busy &&
+                        vm.newPinInput.length in 6..10 &&
+                        vm.confirmPinInput.length in 6..10,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (vm.busy) CircularProgressIndicator(Modifier.height(20.dp)) else Text("Save PIN & continue")
+                }
+                TextButton(onClick = vm::logout, modifier = Modifier.align(Alignment.End)) {
+                    Text("Sign out")
+                }
+            }
+        }
+    }
+}
+
 
 @Composable
 private fun LoginScreen(vm: AppViewModel) {
