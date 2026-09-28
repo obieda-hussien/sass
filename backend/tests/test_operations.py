@@ -1,9 +1,10 @@
 from sqlalchemy import select
 
-from app.models import InventoryBalance, Product, User, Device
+from app.models import InventoryBalance, Order, OrderLine, PickTask, Product, User, Device
+from app.models_ops import OrderBag
 from app.services.operations import (
-    OperationError, active_unpack, apply_cycle_count, boh_move, complete_unpack, damage_move,
-    record_cycle_count, scan_unpack, start_cycle_count, start_unpack,
+    OperationError, active_unpack, apply_cycle_count, bind_unpack_source, boh_move, complete_unpack, damage_move,
+    record_cycle_count, scan_unpack, start_cycle_count, start_unpack, unpack_summary,
 )
 
 
@@ -175,3 +176,51 @@ def test_unpack_start_is_retry_safe_and_resumable(db):
     third = start_unpack(db, "AMBIENT", user.id, device.id)
     db.commit()
     assert third.id != first_id
+
+
+
+def test_unpack_can_bind_single_bag_spoo_manifest(db):
+    user, device = actor(db)
+    ambient = product(db, "DEMO-AMBIENT-001")
+
+    order = Order(external_ref="RETURN-MANIFEST-001", status="COMPLETED")
+    db.add(order)
+    db.flush()
+    db.add(OrderLine(
+        order_id=order.id,
+        product_id=ambient.id,
+        requested_qty=2,
+        allocated_qty=2,
+        picked_qty=2,
+        shorted_qty=0,
+    ))
+    task = PickTask(order_id=order.id, status="COMPLETED", expected_units=2)
+    db.add(task)
+    db.flush()
+    db.add(OrderBag(
+        order_id=order.id,
+        task_id=task.id,
+        bag_no=1,
+        spoo_code="SPOO-RETURN-0001",
+        closed_by_user_id=user.id,
+    ))
+    db.commit()
+
+    session = start_unpack(db, "AMBIENT", user.id, device.id)
+    db.commit()
+    session = db.get(type(session), session.id)
+
+    bind_unpack_source(db, session, "SPOO-RETURN-0001")
+    db.commit()
+    session = db.get(type(session), session.id)
+    summary = unpack_summary(db, session)
+    assert summary["manifest_locked"] is True
+    assert summary["expected_units"] == 2
+    assert summary["remaining_units"] == 2
+
+    scan_unpack(db, session, "return-scan-1", ambient.id, 1)
+    scan_unpack(db, session, "return-scan-2", ambient.id, 1)
+    db.commit()
+    summary = unpack_summary(db, session)
+    assert summary["complete_ready"] is True
+    assert summary["verified_units"] == 2
