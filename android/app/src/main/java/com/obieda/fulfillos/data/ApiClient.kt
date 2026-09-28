@@ -20,6 +20,7 @@ import com.obieda.fulfillos.domain.SessionInfo
 import com.obieda.fulfillos.domain.TaskItem
 import com.obieda.fulfillos.domain.TaskSnapshot
 import com.obieda.fulfillos.domain.UnpackItemRecommendation
+import com.obieda.fulfillos.domain.UnpackManifestItem
 import com.obieda.fulfillos.domain.UnpackSummary
 import org.json.JSONArray
 import org.json.JSONObject
@@ -188,6 +189,12 @@ class ApiClient {
         request(
             "/unpack/sessions",
             JSONObject().put("temperature_class", temperatureClass).toString(),
+        )
+
+    fun bindUnpackSource(sessionId: String, sourceRef: String): Result =
+        request(
+            "/unpack/sessions/${encode(sessionId)}/source",
+            JSONObject().put("source_ref", sourceRef.trim()).toString(),
         )
 
     fun getUnpack(sessionId: String): Result =
@@ -468,11 +475,28 @@ class ApiClient {
                 compatibleDestinations = item.optJSONArray("compatible_destinations")?.strings().orEmpty(),
             )
         }.orEmpty()
+        val manifest = o.optJSONArray("manifest")?.mapObjects { item ->
+            UnpackManifestItem(
+                productId = item.getString("product_id"),
+                asin = item.nullableString("asin"),
+                title = item.optString("title", "Unknown product"),
+                expectedQty = item.optInt("expected_qty", 0),
+                verifiedQty = item.optInt("verified_qty", 0),
+                missingQty = item.optInt("missing_qty", 0),
+            )
+        }.orEmpty()
         return UnpackSummary(
             sessionId = o.getString("session_id"),
             status = o.getString("status"),
             temperatureClass = o.getString("temperature_class"),
             toteLocationId = o.getString("tote_location_id"),
+            sourceRef = o.nullableString("source_ref"),
+            manifestLocked = o.optBoolean("manifest_locked", false),
+            expectedUnits = o.optInt("expected_units", 0),
+            verifiedUnits = o.optInt("verified_units", 0),
+            remainingUnits = o.optInt("remaining_units", 0),
+            completeReady = o.optBoolean("complete_ready", false),
+            manifest = manifest,
             items = items,
         )
     }
