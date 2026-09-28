@@ -113,6 +113,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     var receiveDamagedQtyInput by mutableStateOf("0")
     var receiveLotInput by mutableStateOf("")
     var receiveExpiryInput by mutableStateOf("")
+    var selectedStowTaskId by mutableStateOf<String?>(null)
+        private set
+    var stowDestinationInput by mutableStateOf("")
 
     var replenishmentTasks by mutableStateOf<List<ReplenishmentSummary>>(emptyList())
         private set
@@ -826,8 +829,41 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     fun openReceive() {
         screen = AppScreen.RECEIVE
         receiveProduct = null
+        selectedStowTaskId = null
+        stowDestinationInput = ""
         errorMessage = null
         loadShipments()
+    }
+
+    fun clearSelectedShipment() {
+        selectedShipment = null
+        receiveProduct = null
+        selectedStowTaskId = null
+        stowDestinationInput = ""
+        message = "Choose a shipment to receive"
+    }
+
+    fun selectStowTask(taskId: String) {
+        selectedStowTaskId = taskId
+        stowDestinationInput = ""
+        val shipment = selectedShipment
+        val task = shipment?.stowTasks?.firstOrNull { it.id == taskId }
+        val line = shipment?.lines?.firstOrNull { it.productId == task?.productId }
+        message = if (line?.recommendedStow?.isNotEmpty() == true) {
+            "Scan destination • suggested ${line.recommendedStow.take(3).joinToString()}"
+        } else {
+            "Scan destination bin for stow task"
+        }
+    }
+
+    fun confirmSelectedStow() {
+        val taskId = selectedStowTaskId ?: return
+        val destination = stowDestinationInput.trim()
+        if (destination.isBlank()) {
+            errorMessage = "Scan or enter a destination bin"
+            return
+        }
+        completeStowTask(taskId, destination)
     }
 
     fun loadShipments() {
@@ -853,6 +889,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         if (busy) return
         selectedShipment = shipment
         receiveProduct = null
+        selectedStowTaskId = null
+        stowDestinationInput = ""
         busy = true
         message = "Opening ${shipment.label}…"
         worker.execute {
@@ -940,6 +978,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 busy = false
                 if (response.ok) {
                     message = "Stow confirmed at ${destination.uppercase()}"
+                    selectedStowTaskId = null
+                    stowDestinationInput = ""
                     refreshSelectedShipment()
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
@@ -1245,7 +1285,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     }
 
     private fun handleReceiveScan(value: String) {
-        if (selectedShipment == null) {
+        val shipment = selectedShipment
+        if (shipment == null) {
             val needle = value.trim().uppercase()
             val match = shipments.firstOrNull {
                 it.id.equals(needle, true) || it.label.equals(needle, true)
@@ -1254,6 +1295,21 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             else errorMessage = "Choose a shipment first"
             return
         }
+
+        if (shipment.status == "STOWING" || selectedStowTaskId != null) {
+            val pending = shipment.stowTasks.firstOrNull { it.id == selectedStowTaskId }
+                ?: shipment.stowTasks.firstOrNull { it.status != "COMPLETED" }
+            if (pending == null) {
+                message = "All stow tasks are complete"
+                return
+            }
+            selectedStowTaskId = pending.id
+            stowDestinationInput = canonicalLocation(value)
+            lastLocationId = stowDestinationInput
+            message = "Destination $stowDestinationInput scanned • confirm stow"
+            return
+        }
+
         resolveBarcode(value) { product ->
             receiveProduct = product
             message = "${product.title} • confirm good/damaged quantity"
