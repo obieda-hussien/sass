@@ -702,7 +702,7 @@ export default function PeoplePage() {
         <a href="#onboarding">Add employee</a>
         <a href="#schedule">Shift schedule</a>
         <a href="#team">Team</a>
-        <a href="#payroll">Attendance & payroll</a>
+        <a href="#employee-management">Manage employee</a>
       </nav>
 
       <section className="headlineGrid workforceStats">
