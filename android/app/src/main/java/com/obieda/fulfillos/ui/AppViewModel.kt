@@ -402,6 +402,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     fun openInventory() {
         screen = AppScreen.INVENTORY
         errorMessage = null
+        requestCameraScan("Scan a bin or item barcode")
     }
 
     fun openPick() {
@@ -518,6 +519,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     installTask(updated)
                     scanPhase = PickScanPhase.BIN
                     message = "Accepted • scan the bin"
+                    requestCameraForCurrentContext()
                 } else if (response.code == 401) {
                     expireSession()
                 } else {
@@ -658,6 +660,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     }
                     scannedValue = ""
                     message = "Bag ${bag.bagNo} closed • SPOO ••••${bag.spooLast4}"
+                    requestCameraScan("Scan another bag / SPOO or finish order")
                 } else if (response.code == 401) {
                     expireSession()
                 } else {
@@ -773,6 +776,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 if (summary != null) {
                     unpackSummary = summary
                     message = "Unpack ${summary.toteLocationId} • scan item barcode"
+                    requestCameraScan("Scan unpack item barcode")
                 } else if (response.code == 401) {
                     expireSession()
                 } else {
@@ -806,12 +810,14 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         screen = AppScreen.BOH
         resetOperationScanner()
         message = "BOH Move • scan source bin"
+        requestCameraScan("Scan BOH source bin")
     }
 
     fun openDamage() {
         screen = AppScreen.DAMAGE
         resetOperationScanner()
         message = "Damage • scan source bin"
+        requestCameraScan("Scan damage source bin")
     }
 
     fun openCycleCount() {
@@ -821,6 +827,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         cycleCountProduct = null
         cycleCountEntries = emptyList()
         message = "Cycle Count • scan the bin to count"
+        requestCameraScan("Scan bin to start cycle count")
     }
 
     fun startCycleCount(location: String = cycleCountLocation) {
@@ -837,6 +844,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     cycleCountLocation = root.optString("location_id", loc)
                     lastLocationId = cycleCountLocation
                     message = "Cycle Count open • scan an item barcode"
+                    requestCameraScan("Scan item barcode to count")
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -863,6 +871,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     cycleCountProduct = null
                     cycleCountQtyInput = "0"
                     message = "Count saved • variance ${entry.variance} • scan next item"
+                    requestCameraScan("Scan next item barcode")
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -894,6 +903,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         recoverySummary = null
         errorMessage = null
         message = "Recovery • enter or scan task ID"
+        requestCameraScan("Scan recovery task ID")
     }
 
     fun loadRecovery(taskId: String = recoveryTaskIdInput) {
@@ -909,6 +919,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 if (summary != null) {
                     recoverySummary = summary
                     message = if (summary.items.isEmpty()) "Recovery complete" else "Scan destination for ${summary.items.first().title}"
+                    if (summary.items.isNotEmpty()) requestCameraScan("Scan recovery destination bin")
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -944,6 +955,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         } else {
             "Scan destination bin for stow task"
         }
+        requestCameraScan("Scan stow destination bin")
     }
 
     fun confirmSelectedStow() {
@@ -967,7 +979,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 if (list != null) {
                     shipments = list.filter { it.status != "COMPLETED" && it.status != "CANCELLED" }
                     selectedShipment = selectedShipment?.let { selected -> shipments.firstOrNull { it.id == selected.id } }
-                    message = if (shipments.isEmpty()) "No active inbound shipments" else "Choose a shipment to receive"
+                    message = if (shipments.isEmpty()) "No active inbound shipments" else "Choose or scan a shipment"
+                    if (shipments.isNotEmpty() && selectedShipment == null) requestCameraScan("Scan shipment label or ID")
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -1130,6 +1143,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     replenishmentQtyInput = updated.qty.toString()
                     syncReplenishmentPhase(updated)
                     message = "Replenishment claimed • scan ${updated.sourceLocationId}"
+                    requestCameraForCurrentContext()
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -1209,7 +1223,10 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                             unpackSummary?.let { startOrResumeUnpack(it.temperatureClass) }
                         }
                         PendingOperationEvent.Kind.BOH_MOVE,
-                        PendingOperationEvent.Kind.DAMAGE -> resetOperationScanner()
+                        PendingOperationEvent.Kind.DAMAGE -> {
+                            resetOperationScanner()
+                            requestCameraForCurrentContext()
+                        }
                         PendingOperationEvent.Kind.RECOVERY_STOW -> loadRecovery()
                     }
                 }
@@ -1282,11 +1299,13 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 lastLocationId = operationSourceInput
                 operationScanPhase = OperationScanPhase.ITEM
                 message = "Source ${operationSourceInput} • scan item"
+                requestCameraScan("Scan item barcode")
             }
             OperationScanPhase.ITEM -> resolveBarcode(value) { product ->
                 operationProduct = product
                 operationScanPhase = OperationScanPhase.DESTINATION
                 message = "${product.title} • scan destination bin"
+                requestCameraScan("Scan destination bin")
             }
             OperationScanPhase.DESTINATION -> {
                 val product = operationProduct ?: return
@@ -1314,6 +1333,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 lastLocationId = operationSourceInput
                 operationScanPhase = OperationScanPhase.ITEM
                 message = "Source ${operationSourceInput} • scan damaged item"
+                requestCameraScan("Scan damaged item barcode")
             }
             OperationScanPhase.ITEM -> resolveBarcode(value) { product ->
                 operationProduct = product
@@ -1440,6 +1460,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                         ReplenishmentScanPhase.DESTINATION -> "Item confirmed • scan ${updated.destinationLocationId}"
                         ReplenishmentScanPhase.COMPLETE -> "Destination confirmed • enter actual quantity"
                     }
+                    requestCameraForCurrentContext()
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -1487,6 +1508,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     lastLocationId = item.locationId
                     scanPhase = PickScanPhase.ITEM
                     message = "Bin confirmed • scan ${item.title}"
+                    requestCameraScan("Scan " + item.title + " barcode")
                 } else {
                     errorMessage = "Wrong bin: ${value.trim()} • expected ${item.locationId}"
                     message = "Bin rejected"
@@ -1536,6 +1558,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                         "Unit confirmed • scan next bin"
                     }
                     submittingItemId = null
+                    requestCameraForCurrentContext()
                 }
                 is PickSyncResult.Queued -> {
                     scanPhase = PickScanPhase.SYNCING
@@ -1560,6 +1583,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             task.taskStatus == "PICKED" || task.remainingUnits <= 0 -> PickScanPhase.DONE
             task.recoveryRequired || task.taskStatus == "RECOVERY_REQUIRED" -> PickScanPhase.DONE
             else -> PickScanPhase.BIN
+        }
+        if (task.taskStatus != "OFFERED" && !task.recoveryRequired) {
+            requestCameraForCurrentContext()
         }
     }
 
