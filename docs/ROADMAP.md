@@ -45,74 +45,62 @@ Remaining:
 - full SPECIAL-bin site policy;
 - full handheld UI for several non-pick workflows.
 
-## P2 — Android production client — partially implemented
+## P2 — Android production client — core workflows implemented
 
 Implemented:
 
 - Kotlin + Jetpack Compose;
-- durable local pick-event journal;
+- durable local pick/operation event journals;
 - session/task recovery;
 - WorkManager retry infrastructure;
 - connectivity handling;
 - production endpoint safety;
-- broadcast offers;
-- atomic accept;
-- pick scanning;
-- skip / short / damaged;
-- multi-bag SPOO;
-- completion summary;
-- worker state integration;
-- inventory/barcode tools;
-- screen models/routing for additional operational modules.
+- 5-second PDA presence heartbeat;
+- 3-second automatic Waiting Order / active-task polling;
+- first-login personal PIN setup gate;
+- broadcast offers and atomic accept;
+- picking, skip / short / damaged, multi-bag SPOO and completion summary;
+- inventory/barcode viewer;
+- production Compose screens for Receive/Stow, Unpack, BOH Move, Damage, Cycle Count, Recovery and Replenishment;
+- generic/Zebra-Honeywell-Datalogic broadcast scanner normalization;
+- CameraX + on-device ML Kit barcode fallback;
+- shared scanner pipeline for hardware/camera/manual test input.
 
 Still required:
 
-- complete production-grade Receive screen;
-- complete Unpack screen;
-- complete BOH Move screen;
-- complete Damage disposition screen;
-- complete Cycle Count screen;
-- complete Recovery screen;
-- complete Replenishment handheld flow;
-- industrial scanner intent/profile adapters;
-- camera fallback scanner;
-- stronger foreground-task UX;
+- validate scanner profiles on the exact physical PDA fleet;
+- stronger foreground-task/kiosk UX;
 - localization/RTL polish;
-- device-health and recovery diagnostics.
+- real-site acceptance tests for every operation;
+- production signing / Play App Signing.
 
-## P3 — production backend / governance — partially implemented
+## P3 — production backend / governance — core platform implemented
 
 Implemented:
 
 - PostgreSQL / Neon production DB;
-- Alembic baseline;
-- safe startup migration runner;
-- PostgreSQL advisory migration lock;
+- Alembic baseline and v0.5 schema revisions;
+- safe startup migration runner + PostgreSQL advisory lock;
 - role/user permission grants;
-- admin audit-event model;
-- worker runtime state;
-- active pick leases;
-- operational incidents;
-- guard rules;
-- workforce profiles;
-- rank promotion history;
-- rota/shift templates;
-- break/leave/overtime workflows;
-- explicit payroll attendance policy;
+- broad sensitive-change audit coverage;
+- worker runtime state and active pick leases;
+- operational incidents and guard rules;
+- workforce profiles, rank history, rota, leave, overtime and payroll policy;
+- forced first-login PIN lifecycle, unique username management and safe soft delete;
+- Next.js BFF with HttpOnly/SameSite access+refresh cookies and CSRF validation;
+- transactional outbox with retry/backoff and PostgreSQL SKIP LOCKED;
+- Mongo event-stream sink and optional incident webhook;
+- OpenTelemetry FastAPI/SQLAlchemy instrumentation;
+- structured HTTP logs, request/error counters and latency histograms;
 - production Vercel deployment.
 
 Still required:
 
-- transactional outbox;
-- event bus / live projection distribution;
-- SSE/WebSocket live control tower;
-- OpenTelemetry tracing;
-- structured production metrics;
-- backup/restore drills;
-- disaster recovery;
+- SSE/WebSocket consumers/live projections on top of the outbox;
+- backup/restore and disaster-recovery drills;
 - stronger multi-site tenancy/isolation model;
-- complete audit coverage for every sensitive employee/payroll mutation;
-- short-lived browser sessions + CSRF protection.
+- privacy/retention/export policy;
+- production alert destination configuration and runbooks.
 
 ## P4 — optimization — baseline implemented, calibration remains
 
@@ -174,9 +162,8 @@ PICKER
 
 Remaining:
 
-- verified email/SMS self-service password reset;
+- verified email/SMS self-service PIN reset;
 - HR field retention/export/delete policy;
-- broader sensitive-data audit;
 - richer employee self-service;
 - configurable performance-review periods;
 - promotion eligibility recommendations with explicit human approval;
@@ -185,11 +172,11 @@ Remaining:
 
 ## P6 — hardware and facility integrations
 
-Planned:
+Planned / rollout work:
 
 - production signing / Play App Signing;
 - MDM/kiosk enrollment;
-- industrial scanner profiles;
+- physical-site industrial scanner profile validation;
 - NFC/badge sign-in;
 - label/printer workflows;
 - environmental/cold-chain sensors;
@@ -232,15 +219,33 @@ Planned:
 - deployment health version fixed to v0.4;
 - APK artifact names derived from Gradle version.
 
+## v0.5 milestone — implemented on current release branch
+
+- numeric employee PIN policy (6–10 digits) with six-digit random generation;
+- mandatory first-login personal PIN setup;
+- username uniqueness/change and session revocation;
+- emergency manager PIN reset;
+- safe user deactivation preserving operational history;
+- fresh-PDA presence requirement for dispatch;
+- 5-second heartbeat and 3-second Waiting Order refresh;
+- reorganized web navigation and Quick Actions;
+- HttpOnly/SameSite BFF browser session with CSRF;
+- full non-pick PDA operation screens;
+- industrial scanner adapters plus CameraX/ML Kit fallback;
+- broader sensitive-change audit;
+- transactional outbox and retrying event distribution;
+- OpenTelemetry + structured request metrics/logging;
+- optional incident webhook.
+
 ## Immediate next engineering sequence
 
-1. finish non-pick Android operational screens;
-2. industrial scanner + camera fallback;
-3. production app signing;
-4. browser session/cookie hardening;
-5. full sensitive-change audit coverage;
-6. verified self-service password recovery;
-7. transactional outbox + live event projections;
-8. observability/incident notification;
-9. measured warehouse topology calibration;
-10. replenishment SLA/priority UX.
+1. keep v0.5 CI green and deploy the merged release;
+2. production signing / Play App Signing;
+3. verified self-service email/SMS PIN recovery;
+4. physical PDA/scanner acceptance tests and site profiles;
+5. SSE/WebSocket live projections using outbox events;
+6. measured warehouse topology calibration;
+7. backup/restore + rollback drills;
+8. privacy/retention/export controls;
+9. multi-site/tenant hardening;
+10. replenishment SLA/priority calibration from real demand data.

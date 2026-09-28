@@ -1,4 +1,4 @@
-# FulfillOS reliability design — v0.4
+# FulfillOS reliability design — v0.5
 
 ## Reliability goals
 
@@ -47,7 +47,7 @@ Every inventory-changing event has a unique `event_id`.
 
 The server treats a repeated event ID as read-after-write rather than a second mutation.
 
-This applies to picking and v0.4 replenishment completion.
+This applies to picking, replenishment and retryable v0.5 operational commands.
 
 ## Failure: client counter disagrees with server
 
@@ -306,3 +306,48 @@ Still planned:
 - incident notification;
 - industrial scanner diagnostics;
 - more exhaustive failure injection tests.
+
+
+## Failure: stale PDA is still shown as online
+
+v0.5 does not trust a historical `device.status=ONLINE` by itself.
+
+Android sends a heartbeat every five seconds. Dispatch requires a fresh heartbeat inside the configured presence window; otherwise the worker receives `PDA_NOT_CONNECTED` or `PDA_OFFLINE_OR_STALE` and cannot receive a new order. The control tower also classifies stale devices as offline.
+
+## Failure: employee keeps using a temporary onboarding PIN
+
+New employee/reset PINs are numeric and generated as six digits unless an admin explicitly supplies a 6–10 digit PIN.
+
+A new account starts with `must_change_password=true`. Login itself succeeds so the trusted PDA can authenticate, but warehouse API dependencies return HTTP 428 until the employee completes the personal-PIN flow. Completion revokes the temporary session and issues a rotated session.
+
+## Failure: manager reset leaves stolen/old sessions alive
+
+Username changes, emergency PIN resets and user deactivation revoke existing session tokens. Soft deletion also disables the user, so refresh authentication rejects the account while historical orders, payroll and audit references remain intact.
+
+## Failure: XSS reads the manager bearer token
+
+The v0.5 web console no longer stores FastAPI bearer credentials in `localStorage`. Next.js keeps access/refresh credentials in HttpOnly SameSite cookies and performs backend calls through a BFF proxy. Unsafe browser methods require CSRF validation.
+
+## Failure: telemetry/alert system is down during a warehouse transaction
+
+External publication is decoupled using the transactional outbox:
+
+```text
+business transaction
+  ├─ authoritative row changes
+  └─ outbox row
+      ↓ commit
+background dispatcher
+      ↓ retry/backoff
+external sinks
+```
+
+The warehouse transaction does not depend on MongoDB telemetry or an incident webhook. Failed publications remain retryable and cannot silently undo committed inventory/task/workforce state.
+
+## Failure: two app instances publish the same outbox batch
+
+On PostgreSQL the dispatcher selects work using `FOR UPDATE SKIP LOCKED`. Multiple warm instances can process available events without selecting the same locked batch.
+
+## Failure: production latency/errors become invisible
+
+OpenTelemetry instruments FastAPI and SQLAlchemy. Request count, HTTP 5xx count and duration histograms are produced, and structured request logs include `X-Request-ID`. OTLP export can be enabled without changing business code.

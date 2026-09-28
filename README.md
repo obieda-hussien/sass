@@ -10,8 +10,8 @@ _Status snapshot: 28 September 2026._
 
 | Component | Current state |
 | --- | --- |
-| FulfillOS release | **v0.4.0** |
-| Android | Kotlin + Jetpack Compose, versionCode **5**, minSdk 26, targetSdk 36 |
+| FulfillOS release | **v0.5.0** |
+| Android | Kotlin + Jetpack Compose, versionCode **6**, minSdk 26, targetSdk 36 |
 | API | FastAPI + SQLAlchemy |
 | Primary database | PostgreSQL / Neon |
 | Schema management | **Alembic** with safe pre-Alembic baseline + startup migration runner |
@@ -21,11 +21,11 @@ _Status snapshot: 28 September 2026._
 | CI/CD | GitHub Actions |
 | Production | https://fulfillos-nine.vercel.app |
 | Production API | https://fulfillos-nine.vercel.app/api |
-| Latest merged release | PR #26, FulfillOS v0.4 |
+| Release line | FulfillOS v0.5 UX/realtime/security hardening |
 
 The latest `main` build/deploy checks are green. Production deployment validates `/api/health`, PostgreSQL connectivity, telemetry connectivity, the web root, and then builds production-connected Android APK artifacts.
 
-## What v0.4 contains
+## What v0.5 contains
 
 ### Warehouse execution
 
@@ -52,7 +52,7 @@ The latest `main` build/deploy checks are green. Production deployment validates
 - bin-capacity-aware stow recommendations;
 - warehouse heatmap, expiry-risk reporting, route simulation and operational incidents.
 
-### Replenishment v0.4
+### Replenishment
 
 Replenishment is now an executable workflow rather than only a recommendation:
 
@@ -91,7 +91,11 @@ The flow is server-owned, idempotent and inventory-backed. A partial move can cr
 - approved pay adjustments;
 - payroll preview;
 - password-reset request queue;
-- one-time temporary-password issuance;
+- numeric employee PIN policy: 6–10 digits;
+- generated onboarding/reset PINs are exactly 6 random digits;
+- mandatory personal-PIN change on first PDA login;
+- emergency manager PIN reset with session revocation;
+- unique username changes and safe user deactivation;
 - permission grants and admin audit events.
 
 Operational performance metrics do **not** automatically change employment status, rank or salary.
@@ -130,7 +134,7 @@ Promotions cannot be performed through the generic employee PATCH path, so rank 
 
 ## Permission model
 
-v0.4 adds permission scopes and user/role overrides.
+The permission model includes role scopes plus explicit user/role overrides.
 
 Examples include:
 
@@ -175,34 +179,60 @@ Team Leader, Supervisor and Admin can access the operations control surface acco
 
 ### People & Payroll — `/people`
 
-- employee onboarding;
+- employee onboarding with duplicate-username checks;
+- numeric temporary/custom PIN creation;
 - profile/contact/job/payroll data;
+- username changes with session revocation;
+- emergency PIN resets;
+- safe user deactivation while preserving historical orders/payroll/audit;
 - attendance/overtime;
+- shift templates and rota assignments;
 - payroll preview;
 - pay adjustments;
 - password resets;
 - rank promotion workflow;
 - promotion history.
 
+### Admin & Audit — `/system`
+
+- authenticated system-health view;
+- PostgreSQL outbox pending/published/failed state;
+- OTLP and incident-webhook configuration visibility;
+- effective permission inspection;
+- role-level allow/deny overrides;
+- user-level allow/deny overrides;
+- sensitive-change audit trail with entity filters.
+
+### Browser session security
+
+The manager web console no longer stores bearer tokens in `localStorage`. Next.js acts as a BFF:
+
+- access and refresh credentials are stored in `HttpOnly`, `SameSite=Strict` cookies;
+- state-changing browser requests require an `X-CSRF-Token` matching the CSRF cookie;
+- the browser calls the authenticated `/web-api/*` proxy instead of reading bearer credentials;
+- the BFF refreshes an expired access credential server-side;
+- logout clears all web session cookies.
+
 ## Android PDA
 
-The Android app currently targets the server-authoritative execution model and includes:
+The Android app targets the server-authoritative execution model and includes:
 
 - trusted device login + refresh;
-- durable pending-event journal;
-- offline/reconnect handling;
-- active-task recovery;
-- broadcast offer discovery;
-- atomic accept;
-- pick scanning;
-- skip / short / damaged flows;
-- multi-bag SPOO close;
-- order-completion summary;
-- worker operational-state integration;
+- mandatory first-login personal PIN change before warehouse tools unlock;
+- 5-second PDA heartbeat with connectivity, battery, current task, activity and last-location context;
+- automatic active-task / Waiting Order polling every 3 seconds while the PDA is online;
+- durable pending-event journals and WorkManager retry infrastructure;
+- offline/reconnect handling and active-task recovery;
+- broadcast offer discovery with atomic first-winner acceptance;
+- pick scanning plus skip / short / damaged flows;
+- multi-bag SPOO close and order-completion summary;
 - inventory/barcode tools;
-- WorkManager-backed retry infrastructure.
+- full Compose operational screens for Receive/Stow, Unpack, BOH Move, Damage, Cycle Count, Recovery and Replenishment;
+- foreground industrial scanner adapters for generic FulfillOS profiles plus Zebra/DataWedge, Honeywell and Datalogic payloads;
+- CameraX + on-device ML Kit barcode scanning as a camera fallback;
+- a shared ScanBus so hardware, camera and manual test scans follow the same validation path.
 
-The project includes models/routing for Receive, Cycle Count, Recovery and Replenishment operational screens, but several of those handheld experiences still need full production-grade Compose workflows and scanner UX.
+Receive/Stow, BOH, Damage, Recovery and picking preserve server-side validation; durable local queues are used where the workflow is designed for retryable offline operation. Site-specific scanner profiles and physical warehouse validation still need real-device calibration before broad rollout.
 
 ### Production endpoint safety
 
@@ -235,6 +265,10 @@ Release APKs are currently internally installable and still use the debug signin
 13. Worker operational state gates dispatch.
 14. Rank/pay changes require explicit auditable actions.
 15. Production releases cannot silently target an emulator API URL.
+16. A temporary employee PIN cannot access warehouse APIs until the employee sets a personal PIN.
+17. A picker is dispatchable only while its PDA heartbeat is fresh; stale “ONLINE” devices cannot receive new work.
+18. Sensitive workforce/payroll/account changes are audit events and are emitted through the transactional outbox.
+19. External telemetry/incident delivery is retryable and cannot roll back an already committed warehouse transaction.
 
 ## Warehouse location model
 
@@ -279,6 +313,14 @@ Known semantics include ambient, produce, chilled, frozen, HAZ, HRV, temporary r
 ```
 
 PostgreSQL remains authoritative. MongoDB telemetry is deliberately best-effort and cannot block inventory execution.
+
+## Event distribution and observability
+
+v0.5 adds a PostgreSQL-backed transactional outbox. Business events are inserted in the same database transaction as the authoritative change, then a background dispatcher publishes them independently.
+
+Current outbox topics include sensitive admin audit changes, worker-state transitions, atomic order claims, replenishment completion and operational incidents. The dispatcher uses PostgreSQL `SKIP LOCKED`, retry/backoff, MongoDB telemetry when configured, and an optional incident webhook.
+
+OpenTelemetry instrumentation covers FastAPI and SQLAlchemy, with request counters, server-error counters, latency histograms, structured JSON request logs and `X-Request-ID`. Configure `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces/metrics to an OTLP collector.
 
 ## Database migrations
 
@@ -370,36 +412,33 @@ GitHub Actions currently validates:
 - production web root;
 - production-connected Android artifacts.
 
-The production APK artifact name is generated from Gradle version metadata, e.g. `FulfillOS-v0.4.0-production-apks`.
+The production APK artifact name is generated from Gradle version metadata, e.g. `FulfillOS-v0.5.0-production-apks`.
 
 ## What remains
 
-The largest remaining engineering work is:
+v0.5 closes the previously listed handheld-screen, scanner/camera, browser-session, audit, outbox and observability foundations. The main remaining production work is:
 
-1. finish full production Compose screens for Receive, Unpack, BOH Move, Damage, Cycle Count, Recovery and Replenishment;
-2. add industrial scanner profile adapters and camera fallback scanner;
-3. replace internal debug-key release signing with protected production signing / Play App Signing;
-4. move browser authentication from long-lived localStorage tokens to short-lived HttpOnly/SameSite sessions with CSRF protection;
-5. expand audit coverage to every sensitive employee/profile/payroll edit;
-6. integrate verified email/SMS self-service password recovery;
-7. add transactional outbox + event distribution for scalable live projections;
-8. add OpenTelemetry traces, structured production metrics and stronger incident alerting;
-9. calibrate physical warehouse topology with measured walk distances, one-way paths and congestion data;
-10. complete richer replenishment priority/SLA UX and worker handheld screens;
-11. add statutory payroll/tax behavior only if/when required by the deployment jurisdiction;
-12. implement protected release management, changelogs and rollback artifacts;
-13. add stronger privacy/retention controls for address, phone, salary and attendance data.
+1. replace internal debug-key release signing with protected production signing / Play App Signing;
+2. integrate verified email/SMS self-service password recovery instead of manager-only temporary PIN recovery;
+3. calibrate physical warehouse topology using measured walking distances, one-way paths and real congestion data;
+4. validate/configure industrial scanner profiles on the exact PDA fleet used at each site and run physical workflow acceptance tests;
+5. add richer live event consumption (SSE/WebSocket projections) on top of the transactional outbox so the web can eventually reduce polling;
+6. run backup/restore and disaster-recovery drills for Neon plus release rollback drills;
+7. add stronger privacy/retention/export controls for address, phone, salary and attendance data;
+8. add statutory payroll/tax behavior only if required by the deployment jurisdiction;
+9. mature multi-site/tenant isolation, site-scoped policy management and capacity calibration;
+10. replace internal release signing and formalize protected changelogs/rollback artifacts before public distribution.
 
 ## Documentation
 
-- `docs/API.md` — current API groups and important v0.4 endpoints.
+- `docs/API.md` — current API groups and important v0.5 endpoints.
 - `docs/ARCHITECTURE.md` — authoritative architecture and bounded domains.
 - `docs/DEPLOYMENT.md` — production deployment, Alembic and Android artifacts.
 - `docs/LOCATION_GRAMMAR.md` — location identifiers and logical locations.
 - `docs/RELIABILITY.md` — failure handling and concurrency invariants.
 - `docs/WORKFLOWS.md` — outbound, inbound, replenishment, workforce and promotion flows.
 - `docs/ROADMAP.md` — what is complete and what remains.
-- `BUILD_REPORT.md` — implementation snapshot for v0.4.
+- `BUILD_REPORT.md` — implementation snapshot for v0.5.
 
 ## Design principle
 

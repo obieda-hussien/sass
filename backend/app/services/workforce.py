@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -14,10 +15,11 @@ from ..models import (
     PayAdjustment,
     PerformanceEvent,
     PickTask,
+    SessionToken,
     TaskStatus,
     User,
 )
-from ..models_ops import AttendanceComputation, PayrollPolicy, PromotionRecord
+from ..models_ops import ActivePickLease, AttendanceComputation, PayrollPolicy, PromotionRecord
 from ..security import hash_password
 
 ROLE_LEVELS = {
@@ -39,6 +41,20 @@ class WorkforceError(RuntimeError):
         self.code = code
 
 
+def generate_numeric_pin(length: int = 6) -> str:
+    if length < 6 or length > 10:
+        raise WorkforceError("PIN length must be between 6 and 10 digits", "BAD_PIN_LENGTH")
+    lower = 10 ** (length - 1)
+    return str(lower + secrets.randbelow(9 * lower))
+
+
+def validate_numeric_pin(pin: str) -> str:
+    value = pin.strip()
+    if not value.isdigit() or not 6 <= len(value) <= 10:
+        raise WorkforceError("Password/PIN must contain only 6 to 10 digits", "BAD_PIN")
+    return value
+
+
 def normalize_role(role: str) -> str:
     value = role.strip().upper()
     if value not in ALLOWED_ROLES:
@@ -54,6 +70,8 @@ def employee_payload(db: Session, user: User, *, period: str | None = None) -> d
         "username": user.username,
         "role": user.role,
         "active": user.active,
+        "must_change_password": user.must_change_password,
+        "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None,
         "created_at": user.created_at.isoformat(),
         "profile": None if profile is None else {
             "employee_code": profile.employee_code,
@@ -86,16 +104,20 @@ def create_employee(db: Session, payload: Any) -> tuple[User, str | None]:
         raise WorkforceError("Employee code already exists", "EMPLOYEE_CODE_EXISTS")
 
     role = normalize_role(payload.role)
-    password = payload.password or secrets.token_urlsafe(12)
+    password = validate_numeric_pin(payload.password) if payload.password else generate_numeric_pin(6)
 
     user = User(
         username=username,
         password_hash=hash_password(password),
         role=role,
         active=True,
+        must_change_password=True,
     )
     db.add(user)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise WorkforceError("Username already exists", "USERNAME_EXISTS") from exc
 
     email = payload.email.strip().lower() if payload.email else None
     if email and db.scalar(select(EmployeeProfile).where(EmployeeProfile.email == email)):
@@ -120,8 +142,78 @@ def create_employee(db: Session, payload: Any) -> tuple[User, str | None]:
         notes=payload.notes.strip() if payload.notes else None,
     ))
     db.flush()
-    return user, None if payload.password else password
+    return user, password
 
+
+
+def revoke_user_sessions(db: Session, user_id: str) -> int:
+    sessions = db.scalars(
+        select(SessionToken).where(
+            SessionToken.user_id == user_id,
+            SessionToken.revoked == False,  # noqa: E712
+        )
+    ).all()
+    for session in sessions:
+        session.revoked = True
+    db.flush()
+    return len(sessions)
+
+
+def update_username(db: Session, user: User, username: str) -> tuple[str, str]:
+    value = username.strip()
+    existing = db.scalar(
+        select(User).where(
+            func.lower(User.username) == value.lower(),
+            User.id != user.id,
+        )
+    )
+    if existing is not None:
+        raise WorkforceError("Username already exists", "USERNAME_EXISTS")
+    old = user.username
+    user.username = value
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise WorkforceError("Username already exists", "USERNAME_EXISTS") from exc
+    revoke_user_sessions(db, user.id)
+    return old, value
+
+
+def set_employee_pin(
+    db: Session,
+    user: User,
+    *,
+    pin: str | None = None,
+    require_change_on_next_login: bool = True,
+) -> str:
+    value = validate_numeric_pin(pin) if pin else generate_numeric_pin(6)
+    user.password_hash = hash_password(value)
+    user.must_change_password = bool(require_change_on_next_login)
+    revoke_user_sessions(db, user.id)
+    db.flush()
+    return value
+
+
+def soft_delete_employee(db: Session, user: User, *, reason: str) -> None:
+    if db.get(ActivePickLease, user.id) is not None:
+        raise WorkforceError(
+            "User has an active pick order; hand it over or complete recovery before deletion",
+            "ACTIVE_PICK_EXISTS",
+        )
+    if user.deleted_at is not None:
+        return
+    profile = db.get(EmployeeProfile, user.id)
+    user.active = False
+    user.deleted_at = datetime.now(timezone.utc)
+    user.must_change_password = False
+    if profile is not None:
+        profile.employment_status = "INACTIVE"
+        note = reason.strip()
+        profile.notes = (
+            f"{profile.notes}\n" if profile.notes else ""
+        ) + f"Account deactivated: {note}"
+    revoke_user_sessions(db, user.id)
+    db.flush()
 
 def update_employee(db: Session, user: User, payload: Any) -> None:
     profile = db.get(EmployeeProfile, user.id)
@@ -445,8 +537,10 @@ def issue_temporary_password(
     user = db.get(User, reset.user_id)
     if user is None:
         raise WorkforceError("User not found", "USER_NOT_FOUND")
-    password = explicit_password or secrets.token_urlsafe(12)
+    password = validate_numeric_pin(explicit_password) if explicit_password else generate_numeric_pin(6)
     user.password_hash = hash_password(password)
+    user.must_change_password = True
+    revoke_user_sessions(db, user.id)
     reset.status = "RESOLVED"
     reset.resolved_at = datetime.now(timezone.utc)
     reset.resolved_by_user_id = resolver_id

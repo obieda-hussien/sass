@@ -9,3 +9,9 @@ psycopg[binary]==3.3.6
 pymongo==4.18.2
 
 alembic==1.16.5
+
+opentelemetry-api>=1.29,<2
+opentelemetry-sdk>=1.29,<2
+opentelemetry-instrumentation-fastapi>=0.50b0,<1
+opentelemetry-instrumentation-sqlalchemy>=0.50b0,<1
+opentelemetry-exporter-otlp-proto-http>=1.29,<2

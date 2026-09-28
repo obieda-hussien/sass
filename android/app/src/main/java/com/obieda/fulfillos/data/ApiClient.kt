@@ -2,6 +2,13 @@ package com.obieda.fulfillos.data
 
 import com.obieda.fulfillos.BuildConfig
 import com.obieda.fulfillos.domain.InventoryLookup
+import com.obieda.fulfillos.domain.StowTaskSummary
+import com.obieda.fulfillos.domain.ShipmentSummary
+import com.obieda.fulfillos.domain.ShipmentLineSummary
+import com.obieda.fulfillos.domain.ReplenishmentSummary
+import com.obieda.fulfillos.domain.RecoverySummary
+import com.obieda.fulfillos.domain.RecoveryItem
+import com.obieda.fulfillos.domain.CycleCountEntrySummary
 import com.obieda.fulfillos.domain.InventoryRow
 import com.obieda.fulfillos.domain.BarcodeProduct
 import com.obieda.fulfillos.domain.ClosedBagSummary
@@ -57,6 +64,34 @@ class ApiClient {
                 .put("device_id", deviceId)
                 .toString(),
             authorized = false,
+        )
+
+    fun completeFirstLogin(newPin: String): Result =
+        request(
+            "/auth/complete-first-login",
+            JSONObject()
+                .put("new_password", newPin)
+                .toString(),
+        )
+
+    fun heartbeat(
+        currentTaskId: String?,
+        appVersion: String,
+        connectivity: String,
+        batteryPercent: Int?,
+        lastLocationId: String?,
+        activity: String,
+    ): Result =
+        request(
+            "/devices/heartbeat",
+            JSONObject()
+                .put("current_task_id", currentTaskId ?: JSONObject.NULL)
+                .put("app_version", appVersion)
+                .put("connectivity", connectivity)
+                .put("battery_percent", batteryPercent ?: JSONObject.NULL)
+                .put("last_location_id", lastLocationId ?: JSONObject.NULL)
+                .put("activity", activity)
+                .toString(),
         )
 
     fun getActiveTask(): Result = request("/me/active-task", null, "GET")
@@ -178,6 +213,220 @@ class ApiClient {
         }
     }
 
+    fun getRecovery(taskId: String): Result =
+        request("/tasks/${encode(taskId)}/recovery", null, "GET")
+
+    fun startCycleCount(locationId: String): Result =
+        request(
+            "/cycle-count/sessions",
+            JSONObject().put("location_id", locationId.trim().uppercase()).toString(),
+        )
+
+    fun recordCycleCount(sessionId: String, productId: String, countedQty: Int): Result =
+        request(
+            "/cycle-count/sessions/${encode(sessionId)}/count",
+            JSONObject()
+                .put("product_id", productId)
+                .put("counted_qty", countedQty)
+                .toString(),
+        )
+
+    fun applyCycleCount(sessionId: String): Result =
+        request(
+            "/cycle-count/sessions/${encode(sessionId)}/apply",
+            JSONObject().put("reason", "CYCLE_COUNT_ADJUSTMENT").toString(),
+        )
+
+    fun getShipments(): Result = request("/ops/shipments", null, "GET")
+
+    fun openShipment(shipmentId: String): Result =
+        request("/ops/shipments/${encode(shipmentId)}/open", "{}")
+
+    fun receiveShipmentLine(
+        shipmentId: String,
+        eventId: String,
+        productId: String,
+        goodQty: Int,
+        damagedQty: Int = 0,
+        lotCode: String? = null,
+        expiresOn: String? = null,
+    ): Result =
+        request(
+            "/ops/shipments/${encode(shipmentId)}/receive",
+            JSONObject()
+                .put("event_id", eventId)
+                .put("product_id", productId)
+                .put("good_qty", goodQty)
+                .put("damaged_qty", damagedQty)
+                .put("lot_code", lotCode ?: JSONObject.NULL)
+                .put("expires_on", expiresOn ?: JSONObject.NULL)
+                .toString(),
+        )
+
+    fun completeReceiving(shipmentId: String): Result =
+        request("/ops/shipments/${encode(shipmentId)}/complete-receive", "{}")
+
+    fun getStowRecommendations(taskId: String): Result =
+        request("/ops/stow/${encode(taskId)}/recommendations", null, "GET")
+
+    fun completeStow(taskId: String, eventId: String, destinationLocationId: String): Result =
+        request(
+            "/ops/stow/${encode(taskId)}/complete",
+            JSONObject()
+                .put("event_id", eventId)
+                .put("destination_location_id", destinationLocationId.trim().uppercase())
+                .toString(),
+        )
+
+    fun getReplenishmentQueue(mine: Boolean = true): Result =
+        request("/ops/replenishment/queue?mine=${if (mine) "true" else "false"}", null, "GET")
+
+    fun claimReplenishment(taskId: String): Result =
+        request("/ops/replenishment/${encode(taskId)}/claim", "{}")
+
+    fun scanReplenishmentSource(taskId: String, eventId: String, locationId: String): Result =
+        request(
+            "/ops/replenishment/${encode(taskId)}/source",
+            JSONObject()
+                .put("event_id", eventId)
+                .put("source_location_id", locationId.trim().uppercase())
+                .toString(),
+        )
+
+    fun scanReplenishmentItem(taskId: String, eventId: String, barcode: String): Result =
+        request(
+            "/ops/replenishment/${encode(taskId)}/item",
+            JSONObject()
+                .put("event_id", eventId)
+                .put("barcode", barcode.trim())
+                .toString(),
+        )
+
+    fun scanReplenishmentDestination(taskId: String, eventId: String, locationId: String): Result =
+        request(
+            "/ops/replenishment/${encode(taskId)}/destination",
+            JSONObject()
+                .put("event_id", eventId)
+                .put("destination_location_id", locationId.trim().uppercase())
+                .toString(),
+        )
+
+    fun completeReplenishment(taskId: String, eventId: String, actualQty: Int): Result =
+        request(
+            "/ops/replenishment/${encode(taskId)}/complete",
+            JSONObject()
+                .put("event_id", eventId)
+                .put("actual_qty", actualQty)
+                .toString(),
+        )
+
+    fun parseRecovery(body: String): RecoverySummary {
+        val root = JSONObject(body)
+        return RecoverySummary(
+            taskId = root.getString("task_id"),
+            orderId = root.getString("order_id"),
+            recoveryType = root.getString("recovery_type"),
+            sourceLocationId = root.nullableString("source_location_id"),
+            items = root.optJSONArray("items")?.mapObjects { item ->
+                RecoveryItem(
+                    productId = item.getString("product_id"),
+                    asin = item.nullableString("asin"),
+                    title = item.optString("title", "Unknown product"),
+                    qty = item.getInt("qty"),
+                    sourceLocationId = item.getString("source_location_id"),
+                    compatibleDestinations = item.optJSONArray("compatible_destinations")?.strings().orEmpty(),
+                )
+            }.orEmpty(),
+        )
+    }
+
+    fun parseCycleCountEntry(body: String): CycleCountEntrySummary {
+        val root = JSONObject(body)
+        return CycleCountEntrySummary(
+            entryId = root.getString("entry_id"),
+            productId = root.getString("product_id"),
+            systemQty = root.getInt("system_qty"),
+            countedQty = root.getInt("counted_qty"),
+            variance = root.getInt("variance"),
+        )
+    }
+
+    fun parseShipments(body: String): List<ShipmentSummary> {
+        val root = JSONObject(body)
+        return root.optJSONArray("shipments")?.mapObjects(::parseShipment).orEmpty()
+    }
+
+    fun parseShipment(body: String): ShipmentSummary = parseShipment(JSONObject(body))
+
+    private fun parseShipment(root: JSONObject): ShipmentSummary {
+        return ShipmentSummary(
+            id = root.getString("id"),
+            label = root.getString("label"),
+            shipmentType = root.getString("shipment_type"),
+            storageDomain = root.getString("storage_domain"),
+            status = root.getString("status"),
+            expectedUnits = root.optInt("expected_units", 0),
+            receivedUnits = root.optInt("received_units", 0),
+            damagedUnits = root.optInt("damaged_units", 0),
+            missingUnits = root.optInt("missing_units", 0),
+            targetStowMinutes = root.optInt("target_stow_minutes", 0),
+            elapsedMinutes = if (root.has("elapsed_minutes") && !root.isNull("elapsed_minutes")) root.getInt("elapsed_minutes") else null,
+            stowOverdue = root.optBoolean("stow_overdue", false),
+            lines = root.optJSONArray("lines")?.mapObjects { line ->
+                ShipmentLineSummary(
+                    id = line.getString("id"),
+                    productId = line.getString("product_id"),
+                    expectedQty = line.optInt("expected_qty", 0),
+                    receivedQty = line.optInt("received_qty", 0),
+                    damagedQty = line.optInt("damaged_qty", 0),
+                    missingQty = line.optInt("missing_qty", 0),
+                    recommendedStow = line.optJSONArray("recommended_stow")?.mapObjects { rec ->
+                        rec.getString("location_id")
+                    }.orEmpty(),
+                )
+            }.orEmpty(),
+            stowTasks = root.optJSONArray("stow_tasks")?.mapObjects { task ->
+                StowTaskSummary(
+                    id = task.getString("id"),
+                    productId = task.getString("product_id"),
+                    qty = task.optInt("qty", 0),
+                    status = task.getString("status"),
+                    destinationLocationId = task.nullableString("destination_location_id"),
+                )
+            }.orEmpty(),
+        )
+    }
+
+    fun parseReplenishmentQueue(body: String): List<ReplenishmentSummary> {
+        val root = JSONObject(body)
+        return root.optJSONArray("tasks")?.mapObjects(::parseReplenishment).orEmpty()
+    }
+
+    fun parseReplenishmentEnvelope(body: String): ReplenishmentSummary {
+        val root = JSONObject(body)
+        return if (root.has("task") && !root.isNull("task")) {
+            parseReplenishment(root.getJSONObject("task"))
+        } else {
+            parseReplenishment(root)
+        }
+    }
+
+    private fun parseReplenishment(root: JSONObject): ReplenishmentSummary =
+        ReplenishmentSummary(
+            id = root.getString("id"),
+            productId = root.getString("product_id"),
+            asin = root.nullableString("asin"),
+            title = root.optString("title", "Unknown product"),
+            sourceLocationId = root.getString("source_location_id"),
+            destinationLocationId = root.getString("destination_location_id"),
+            qty = root.optInt("qty", 0),
+            actualQty = root.optInt("actual_qty", 0),
+            status = root.getString("status"),
+            priority = root.optInt("priority", 0),
+            sourceAvailableQty = root.optInt("source_available_qty", 0),
+            destinationOnHand = root.optInt("destination_on_hand", 0),
+        )
+
     fun parseBarcodeProduct(body: String): BarcodeProduct {
         val root = JSONObject(body)
         val product = root.getJSONObject("product")
@@ -216,6 +465,11 @@ class ApiClient {
         )
     }
 
+    fun parseSessionEnvelope(body: String): SessionInfo {
+        val root = JSONObject(body)
+        return parseSession(root.getJSONObject("session").toString())
+    }
+
     fun parseSession(body: String): SessionInfo {
         val o = JSONObject(body)
         return SessionInfo(
@@ -225,6 +479,7 @@ class ApiClient {
             username = o.getString("username"),
             role = o.getString("role"),
             deviceId = o.getString("device_id"),
+            mustChangePassword = o.optBoolean("must_change_password", false),
         )
     }
 

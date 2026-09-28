@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -63,8 +64,15 @@ def seed_demo(db: Session) -> None:
     if db.scalar(select(User).where(User.username == "picker1")) is None:
         db.add(User(username="picker1", password_hash=hash_password("demo1234"), role="PICKER"))
         db.add(User(username="supervisor", password_hash=hash_password("demo1234"), role="SUPERVISOR"))
-    if db.get(Device, "PDA-DEMO-001") is None:
-        db.add(Device(id="PDA-DEMO-001", trusted=True, app_version="0.1.0"))
+    demo_picker = db.scalar(select(User).where(User.username == "picker1"))
+    demo_device = db.get(Device, "PDA-DEMO-001")
+    if demo_device is None:
+        demo_device = Device(id="PDA-DEMO-001", trusted=True, app_version="0.1.0")
+        db.add(demo_device)
+    if demo_picker is not None:
+        demo_device.last_user_id = demo_picker.id
+        demo_device.last_seen_at = datetime.now(timezone.utc)
+        demo_device.status = "ONLINE"
 
     for loc in [
         "P-1-A101A110", "P-1-A115E181", "P-1-V112A110", "P-1-D121B120",

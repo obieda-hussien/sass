@@ -6,13 +6,25 @@ import {
   addPayAdjustment,
   addPerformanceEvent,
   createEmployee,
+  createShiftTemplate,
+  assignShift,
   getEmployees,
   getPasswordResets,
+  getRoster,
+  getShiftTemplates,
   issueTemporaryPassword,
   managerLogin,
+  getWebSession,
+  managerLogout,
   promoteEmployee,
+  updateEmployeeAccount,
+  setEmployeePin,
+  deleteEmployee,
+  usernameAvailability,
   type Employee,
   type PasswordResetItem,
+  type ShiftAssignment,
+  type ShiftTemplate,
 } from "../../lib/api";
 
 type CreateForm = {
@@ -56,6 +68,23 @@ const emptyForm: CreateForm = {
   grace_minutes: "10",
 };
 
+function generateSixDigitPin() {
+  const value = new Uint32Array(1);
+  window.crypto.getRandomValues(value);
+  return String(100000 + (value[0] % 900000));
+}
+
+function timeFromMinutes(value: number) {
+  const hours = Math.floor(value / 60) % 24;
+  const minutes = value % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function minutesFromTime(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
 function money(cents: number, currency = "EGP") {
   return new Intl.NumberFormat("en-EG", {
     style: "currency",
@@ -66,10 +95,13 @@ function money(cents: number, currency = "EGP") {
 
 export default function PeoplePage() {
   const [token, setToken] = useState("");
+  const [authChecking, setAuthChecking] = useState(true);
   const [loginUser, setLoginUser] = useState("supervisor");
   const [loginPassword, setLoginPassword] = useState("");
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [resets, setResets] = useState<PasswordResetItem[]>([]);
+  const [shiftTemplates, setShiftTemplates] = useState<ShiftTemplate[]>([]);
+  const [roster, setRoster] = useState<ShiftAssignment[]>([]);
   const [form, setForm] = useState<CreateForm>(emptyForm);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -97,21 +129,62 @@ export default function PeoplePage() {
     new_base_salary: "",
     reason: "",
   });
+  const [accountForm, setAccountForm] = useState({
+    username: "",
+    pin: "",
+    require_change: true,
+    delete_reason: "",
+  });
+  const [usernameHint, setUsernameHint] = useState("");
+  const [shiftTemplateForm, setShiftTemplateForm] = useState({
+    name: "Middle",
+    start: "14:00",
+    end: "23:00",
+    break_minutes: "30",
+    grace_minutes: "10",
+  });
+  const [shiftAssignmentForm, setShiftAssignmentForm] = useState({
+    user_id: "",
+    shift_template_id: "",
+    shift_date: new Date().toISOString().slice(0, 10),
+  });
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("fulfillos_admin_token");
-    if (saved) setToken(saved);
+    void getWebSession()
+      .then((session) => {
+        if (
+          session.authenticated &&
+          ["SUPERVISOR", "ADMIN"].includes(session.role.toUpperCase())
+        ) {
+          setToken("session");
+        }
+      })
+      .finally(() => setAuthChecking(false));
   }, []);
 
   async function refresh(activeToken = token) {
     if (!activeToken) return;
     try {
-      const [people, resetData] = await Promise.all([
+      const today = new Date();
+      const from = today.toISOString().slice(0, 10);
+      const end = new Date(today);
+      end.setDate(end.getDate() + 7);
+      const to = end.toISOString().slice(0, 10);
+      const [people, resetData, templateData, rosterData] = await Promise.all([
         getEmployees(activeToken),
         getPasswordResets(activeToken),
+        getShiftTemplates(activeToken),
+        getRoster(activeToken, from, to),
       ]);
       setEmployees(people.employees);
       setResets(resetData.requests);
+      setShiftTemplates(templateData.templates);
+      setRoster(rosterData.assignments);
+      setShiftAssignmentForm((current) => ({
+        ...current,
+        user_id: current.user_id || people.employees[0]?.user_id || "",
+        shift_template_id: current.shift_template_id || templateData.templates[0]?.id || "",
+      }));
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to load workforce data");
@@ -131,8 +204,7 @@ export default function PeoplePage() {
       if (!["SUPERVISOR", "ADMIN"].includes(result.role.toUpperCase())) {
         throw new Error("Supervisor or admin role required");
       }
-      window.localStorage.setItem("fulfillos_admin_token", result.access_token);
-      setToken(result.access_token);
+      setToken("session");
       setLoginPassword("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Login failed");
@@ -167,7 +239,7 @@ export default function PeoplePage() {
       setForm(emptyForm);
       setNotice(
         created.temporary_password
-          ? `Employee created. Temporary password: ${created.temporary_password}`
+          ? `Employee created. Temporary PIN: ${created.temporary_password}`
           : "Employee created successfully.",
       );
       await refresh(token);
@@ -186,7 +258,7 @@ export default function PeoplePage() {
     try {
       const result = await issueTemporaryPassword(token, item.id);
       setNotice(
-        `Temporary password for ${item.username ?? item.full_name ?? "employee"}: ${result.temporary_password}`,
+        `Temporary PIN for ${item.username ?? item.full_name ?? "employee"}: ${result.temporary_password}`,
       );
       await refresh(token);
     } catch (cause) {
@@ -215,6 +287,99 @@ export default function PeoplePage() {
       setPromotionForm((current) => ({...current, to_role: promotionTargets[0]}));
     }
   }, [selectedEmployee, promotionTargets, promotionForm.to_role]);
+
+  useEffect(() => {
+    if (!selectedEmployee) return;
+    setAccountForm((current) => ({
+      ...current,
+      username: selectedEmployee.username,
+      pin: "",
+      delete_reason: "",
+    }));
+    setUsernameHint("");
+  }, [selectedEmployee?.user_id]);
+
+
+  async function checkUsername(username: string, excludeUserId?: string) {
+    if (!token || username.trim().length < 3) return false;
+    try {
+      const result = await usernameAvailability(token, username.trim(), excludeUserId);
+      setUsernameHint(result.available ? "Username is available" : "Username already exists");
+      return result.available;
+    } catch {
+      setUsernameHint("Could not verify username");
+      return false;
+    }
+  }
+
+  async function submitUsername(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    const username = accountForm.username.trim();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const available = await checkUsername(username, selectedEmployee.user_id);
+      if (!available && username.toLowerCase() !== selectedEmployee.username.toLowerCase()) {
+        throw new Error("Username already exists");
+      }
+      const result = await updateEmployeeAccount(token, selectedEmployee.user_id, username);
+      setNotice(`Username changed to @${result.username}. Existing PDA sessions were signed out.`);
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not change username");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitAdminPin(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await setEmployeePin(token, selectedEmployee.user_id, {
+        password: accountForm.pin || null,
+        require_change_on_next_login: accountForm.require_change,
+      });
+      setAccountForm((current) => ({...current, pin: ""}));
+      setNotice(
+        `New PIN for @${selectedEmployee.username}: ${result.temporary_password}` +
+          (result.must_change_password ? " · employee must change it at next PDA login" : ""),
+      );
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not set employee PIN");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitDeleteEmployee(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    const reason = accountForm.delete_reason.trim();
+    if (!reason) return;
+    if (!window.confirm(`Deactivate and delete access for ${selectedEmployee.profile?.full_name ?? selectedEmployee.username}? Historical orders/payroll will be preserved.`)) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await deleteEmployee(token, selectedEmployee.user_id, reason);
+      setNotice(`@${selectedEmployee.username} was deactivated. Historical records were preserved.`);
+      setSelectedId("");
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not deactivate employee");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submitAttendance(event: FormEvent) {
     event.preventDefault();
@@ -322,6 +487,52 @@ export default function PeoplePage() {
     }
   }
 
+  async function submitShiftTemplate(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const created = await createShiftTemplate(token, {
+        site_id: "DEMO",
+        name: shiftTemplateForm.name,
+        start_minute: minutesFromTime(shiftTemplateForm.start),
+        end_minute: minutesFromTime(shiftTemplateForm.end),
+        timezone_name: "Africa/Cairo",
+        break_minutes: Number(shiftTemplateForm.break_minutes || "0"),
+        grace_minutes: Number(shiftTemplateForm.grace_minutes || "0"),
+      });
+      setNotice(`Shift template created: ${created.name}`);
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not create shift template");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitShiftAssignment(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !shiftAssignmentForm.user_id || !shiftAssignmentForm.shift_template_id) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const created = await assignShift(token, {
+        user_id: shiftAssignmentForm.user_id,
+        shift_template_id: shiftAssignmentForm.shift_template_id,
+        shift_date: shiftAssignmentForm.shift_date,
+      });
+      setNotice(`Shift assigned for ${created.shift_date}`);
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not assign shift");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const totals = useMemo(() => {
     return employees.reduce(
       (acc, item) => {
@@ -334,6 +545,10 @@ export default function PeoplePage() {
       { people: 0, orders: 0, overtime: 0, late: 0 },
     );
   }, [employees]);
+
+  if (authChecking) {
+    return <main className="shell peopleShell"><section className="panel authPanel">Checking secure session…</section></main>;
+  }
 
   if (!token) {
     return (
@@ -388,7 +603,7 @@ export default function PeoplePage() {
           <button onClick={() => void refresh()} disabled={busy}>Refresh</button>
           <button
             onClick={() => {
-              window.localStorage.removeItem("fulfillos_admin_token");
+              void managerLogout();
               setToken("");
               setEmployees([]);
             }}
@@ -400,6 +615,13 @@ export default function PeoplePage() {
 
       {notice && <section className="noticeBox">{notice}</section>}
       {error && <section className="alert">{error}</section>}
+
+      <nav className="sectionJumpNav" aria-label="People sections">
+        <a href="#onboarding">Add employee</a>
+        <a href="#schedule">Shift schedule</a>
+        <a href="#team">Team</a>
+        <a href="#payroll">Attendance & payroll</a>
+      </nav>
 
       <section className="headlineGrid workforceStats">
         <article className="heroCard">
@@ -419,7 +641,7 @@ export default function PeoplePage() {
         </article>
       </section>
 
-      <section className="panelGrid workforceGrid">
+      <section id="onboarding" className="panelGrid workforceGrid">
         <article className="panel">
           <div className="panelHeading">
             <div>
@@ -430,8 +652,33 @@ export default function PeoplePage() {
           <form className="employeeForm" onSubmit={submitEmployee}>
             <label><span>Full name</span><input required value={form.full_name} onChange={(e) => setForm({...form, full_name:e.target.value})} /></label>
             <label><span>Employee code</span><input required value={form.employee_code} onChange={(e) => setForm({...form, employee_code:e.target.value})} /></label>
-            <label><span>Username</span><input required value={form.username} onChange={(e) => setForm({...form, username:e.target.value})} /></label>
-            <label><span>Initial password <small>(blank = generated)</small></span><input type="password" value={form.password} onChange={(e) => setForm({...form, password:e.target.value})} /></label>
+            <label>
+              <span>Username</span>
+              <input
+                required
+                value={form.username}
+                onChange={(e) => { setForm({...form, username:e.target.value}); setUsernameHint(""); }}
+                onBlur={() => { if (form.username) void checkUsername(form.username); }}
+              />
+              {usernameHint && <small className={usernameHint.includes("exists") ? "fieldHint dangerText" : "fieldHint"}>{usernameHint}</small>}
+            </label>
+            <label className="pinField">
+              <span>Initial PIN <small>(6–10 digits; blank = random 6 digits)</small></span>
+              <div className="inlineFieldAction">
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]{6,10}"
+                  minLength={6}
+                  maxLength={10}
+                  value={form.password}
+                  onChange={(e) => setForm({...form, password:e.target.value.replace(/\D/g, "").slice(0, 10)})}
+                />
+                <button type="button" className="miniAction" onClick={() => setForm({...form, password:generateSixDigitPin()})}>
+                  Generate 6-digit
+                </button>
+              </div>
+            </label>
             <label><span>Email</span><input type="email" value={form.email} onChange={(e) => setForm({...form, email:e.target.value})} /></label>
             <label><span>Phone</span><input value={form.phone} onChange={(e) => setForm({...form, phone:e.target.value})} /></label>
             <label className="wideField"><span>Address</span><input value={form.address} onChange={(e) => setForm({...form, address:e.target.value})} /></label>
@@ -474,7 +721,7 @@ export default function PeoplePage() {
                     <small>@{item.username} · {new Date(item.requested_at).toLocaleString()}</small>
                   </div>
                   <button onClick={() => void resolveReset(item)} disabled={busy}>
-                    Issue temporary password
+                    Issue temporary PIN
                   </button>
                 </div>
               ))}
@@ -483,7 +730,52 @@ export default function PeoplePage() {
         </article>
       </section>
 
-      <section className="panel employeesPanel">
+      <section id="schedule" className="panel opsSection">
+        <div className="panelHeading">
+          <div>
+            <p className="eyebrow">SHIFT SCHEDULE</p>
+            <h2>Templates & next 7 days</h2>
+          </div>
+          <span className="chip">{roster.length} assignments</span>
+        </div>
+        <p className="sectionHelp">
+          Create a reusable shift once, then assign employees by date. Clock-in/out can use the scheduled window automatically.
+        </p>
+        <div className="managerForms">
+          <form className="managerForm" onSubmit={submitShiftTemplate}>
+            <h3>Create shift template</h3>
+            <label><span>Name</span><input required value={shiftTemplateForm.name} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, name:e.target.value})} /></label>
+            <label><span>Start</span><input type="time" required value={shiftTemplateForm.start} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, start:e.target.value})} /></label>
+            <label><span>End</span><input type="time" required value={shiftTemplateForm.end} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, end:e.target.value})} /></label>
+            <label><span>Break minutes</span><input type="number" min="0" value={shiftTemplateForm.break_minutes} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, break_minutes:e.target.value})} /></label>
+            <label><span>Grace minutes</span><input type="number" min="0" value={shiftTemplateForm.grace_minutes} onChange={(e) => setShiftTemplateForm({...shiftTemplateForm, grace_minutes:e.target.value})} /></label>
+            <button className="primaryButton" disabled={busy}>Save template</button>
+          </form>
+
+          <form className="managerForm" onSubmit={submitShiftAssignment}>
+            <h3>Assign employee</h3>
+            <label><span>Employee</span><select value={shiftAssignmentForm.user_id} onChange={(e) => setShiftAssignmentForm({...shiftAssignmentForm, user_id:e.target.value})}>{employees.map((employee) => <option key={employee.user_id} value={employee.user_id}>{employee.profile?.full_name ?? employee.username}</option>)}</select></label>
+            <label><span>Shift</span><select value={shiftAssignmentForm.shift_template_id} onChange={(e) => setShiftAssignmentForm({...shiftAssignmentForm, shift_template_id:e.target.value})}>{shiftTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · {timeFromMinutes(template.start_minute)}–{timeFromMinutes(template.end_minute)}</option>)}</select></label>
+            <label><span>Date</span><input type="date" required value={shiftAssignmentForm.shift_date} onChange={(e) => setShiftAssignmentForm({...shiftAssignmentForm, shift_date:e.target.value})} /></label>
+            <button className="primaryButton" disabled={busy || shiftTemplates.length === 0 || employees.length === 0}>Assign shift</button>
+          </form>
+        </div>
+
+        <div className="rosterGrid" style={{marginTop: 12}}>
+          {roster.length === 0 ? (
+            <div className="empty compactEmpty"><span>⌚</span><div><strong>No scheduled shifts in the next 7 days</strong><p>Create a template, then assign an employee.</p></div></div>
+          ) : roster.map((item) => (
+            <div className="rosterRow" key={item.id}>
+              <div><strong>{item.username ?? item.user_id}</strong><small>{item.template_name ?? "Custom shift"} · {item.shift_date}</small></div>
+              <div><small>Start</small><strong>{new Date(item.scheduled_start_at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}</strong></div>
+              <div><small>End</small><strong>{new Date(item.scheduled_end_at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}</strong></div>
+              <div><small>Status</small><strong>{item.status}</strong></div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section id="team" className="panel employeesPanel">
         <div className="panelHeading">
           <div>
             <p className="eyebrow">TEAM</p>
@@ -510,7 +802,7 @@ export default function PeoplePage() {
                       Manage
                     </button>
                     <span className={item.active ? "employeeStatus active" : "employeeStatus"}>
-                      {item.active ? "Active" : "Inactive"}
+                      {item.deleted_at ? "Deleted" : item.must_change_password ? "PIN change required" : item.active ? "Active" : "Inactive"}
                     </span>
                   </div>
                 </div>
@@ -541,7 +833,7 @@ export default function PeoplePage() {
       </section>
 
       {selectedEmployee?.profile && (
-        <section className="panel managerPanel">
+        <section id="payroll" className="panel managerPanel">
           <div className="panelHeading">
             <div>
               <p className="eyebrow">SUPERVISOR ACTIONS</p>
@@ -551,6 +843,60 @@ export default function PeoplePage() {
           </div>
 
           <div className="managerForms">
+            <form className="managerForm" onSubmit={submitUsername}>
+              <h3>Account & access</h3>
+              <p className="policyNote">Username changes are unique and revoke existing sessions. Operational history stays attached to the same employee ID.</p>
+              <label>
+                <span>Username</span>
+                <input
+                  required
+                  minLength={3}
+                  value={accountForm.username}
+                  onChange={(e) => { setAccountForm({...accountForm, username:e.target.value}); setUsernameHint(""); }}
+                  onBlur={() => { if (accountForm.username) void checkUsername(accountForm.username, selectedEmployee.user_id); }}
+                />
+                {usernameHint && <small className={usernameHint.includes("exists") ? "fieldHint dangerText" : "fieldHint"}>{usernameHint}</small>}
+              </label>
+              <button className="primaryButton" disabled={busy || selectedEmployee.deleted_at != null}>Change username</button>
+            </form>
+
+            <form className="managerForm" onSubmit={submitAdminPin}>
+              <h3>Emergency PIN reset</h3>
+              <label>
+                <span>New PIN <small>(blank = random 6 digits)</small></span>
+                <div className="inlineFieldAction">
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]{6,10}"
+                    minLength={6}
+                    maxLength={10}
+                    value={accountForm.pin}
+                    onChange={(e) => setAccountForm({...accountForm, pin:e.target.value.replace(/\D/g, "").slice(0, 10)})}
+                  />
+                  <button type="button" className="miniAction" onClick={() => setAccountForm({...accountForm, pin:generateSixDigitPin()})}>Generate 6-digit</button>
+                </div>
+              </label>
+              <label className="checkField">
+                <input
+                  type="checkbox"
+                  checked={accountForm.require_change}
+                  onChange={(e) => setAccountForm({...accountForm, require_change:e.target.checked})}
+                />
+                <span>Force employee to choose a personal PIN on next PDA login</span>
+              </label>
+              <button className="primaryButton" disabled={busy || selectedEmployee.deleted_at != null}>Set / reset PIN</button>
+            </form>
+
+            <form className="managerForm dangerPanel" onSubmit={submitDeleteEmployee}>
+              <h3>Delete user access</h3>
+              <p className="policyNote">This is a safe soft-delete: login, dispatch and sessions stop, but orders, attendance, payroll and audit history are preserved.</p>
+              <label><span>Reason</span><input required value={accountForm.delete_reason} onChange={(e) => setAccountForm({...accountForm, delete_reason:e.target.value})} /></label>
+              <button className="dangerButton" disabled={busy || selectedEmployee.deleted_at != null}>
+                {selectedEmployee.deleted_at ? "Already deleted" : "Delete user access"}
+              </button>
+            </form>
+
             <form className="managerForm" onSubmit={submitAttendance}>
               <h3>Attendance & overtime</h3>
               <label><span>Scheduled start</span><input type="datetime-local" required value={attendanceForm.scheduled_start_at} onChange={(e) => setAttendanceForm({...attendanceForm, scheduled_start_at:e.target.value})} /></label>

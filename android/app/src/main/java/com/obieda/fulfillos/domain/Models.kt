@@ -7,6 +7,7 @@ data class SessionInfo(
     val username: String,
     val role: String,
     val deviceId: String,
+    val mustChangePassword: Boolean = false,
 )
 
 data class TaskItem(

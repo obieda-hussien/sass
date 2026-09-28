@@ -24,12 +24,16 @@ class SessionResponse(BaseModel):
     username: str
     role: str
     device_id: str
+    must_change_password: bool = False
 
 
 class HeartbeatRequest(BaseModel):
     current_task_id: str | None = None
     app_version: str | None = None
     connectivity: str = "ONLINE"
+    battery_percent: int | None = Field(default=None, ge=0, le=100)
+    last_location_id: str | None = None
+    activity: str | None = Field(default=None, max_length=80)
 
 
 class InventoryMoveRequest(BaseModel):
@@ -170,12 +174,16 @@ class ForgotPasswordRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
-    new_password: str = Field(min_length=10, max_length=128)
+    new_password: str = Field(min_length=6, max_length=10, pattern=r"^\d{6,10}$")
+
+
+class CompleteFirstLoginRequest(BaseModel):
+    new_password: str = Field(min_length=6, max_length=10, pattern=r"^\d{6,10}$")
 
 
 class EmployeeCreateRequest(BaseModel):
     username: str = Field(min_length=3, max_length=80)
-    password: str | None = Field(default=None, min_length=10, max_length=128)
+    password: str | None = Field(default=None, min_length=6, max_length=10, pattern=r"^\d{6,10}$")
     role: str = "PICKER"
     employee_code: str = Field(min_length=2, max_length=40)
     full_name: str = Field(min_length=2, max_length=160)
@@ -240,7 +248,7 @@ class PayAdjustmentCreateRequest(BaseModel):
 
 
 class TemporaryPasswordRequest(BaseModel):
-    password: str | None = Field(default=None, min_length=10, max_length=128)
+    password: str | None = Field(default=None, min_length=6, max_length=10, pattern=r"^\d{6,10}$")
 
 
 class PromotionRequest(BaseModel):
@@ -248,3 +256,16 @@ class PromotionRequest(BaseModel):
     reason: str = Field(min_length=2, max_length=300)
     new_base_salary_cents: int | None = Field(default=None, ge=0)
     effective_at: datetime | None = None
+
+
+class AdminAccountUpdateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
+
+
+class AdminSetPinRequest(BaseModel):
+    password: str | None = Field(default=None, min_length=6, max_length=10, pattern=r"^\d{6,10}$")
+    require_change_on_next_login: bool = True
+
+
+class AdminDeactivateUserRequest(BaseModel):
+    reason: str = Field(min_length=2, max_length=240)

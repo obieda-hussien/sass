@@ -1,4 +1,4 @@
-# FulfillOS architecture — v0.4
+# FulfillOS architecture — v0.5
 
 ## 1. System boundary
 
@@ -30,7 +30,7 @@ Android and web are execution/control clients. Neither is the source of truth.
 ```text
 Android PDA ───────┐
                    │ HTTPS
-Next.js Web ───────┼────► FastAPI
+Next.js Web ──► BFF (HttpOnly/CSRF) ──► FastAPI
                    │         │
                    │         ├────► PostgreSQL / Neon
                    │         │       authoritative state
@@ -45,7 +45,7 @@ Next.js Web ───────┼────► FastAPI
 
 PostgreSQL owns:
 
-- users, devices and sessions;
+- users, forced-PIN state, soft-delete state, devices and sessions;
 - employee/workforce data;
 - ranks, promotion history and payroll policy;
 - shift templates, assignments, breaks, leave and overtime requests;
@@ -63,7 +63,8 @@ PostgreSQL owns:
 - shipments/receiving/stow;
 - operational incidents;
 - guard rules;
-- audit events.
+- audit events;
+- transactional outbox events.
 
 MongoDB Atlas is not allowed to become authoritative for stock, orders, payroll or task ownership.
 
@@ -92,6 +93,23 @@ PICKER
 ```
 
 `ADMIN` is a technical governance role outside the warehouse promotion ladder.
+
+### Browser BFF security boundary
+
+The manager website uses Next.js as a backend-for-frontend rather than handing FastAPI bearer credentials to browser JavaScript.
+
+```text
+Browser
+  ├─ HttpOnly access cookie
+  ├─ HttpOnly refresh cookie
+  └─ readable SameSite CSRF cookie
+        ↓
+Next.js /web-api/*
+        ↓ bearer added server-side
+FastAPI
+```
+
+Unsafe browser methods require the CSRF header/cookie pair. Access-token refresh happens server-side. Employee first-login PIN changes remain a direct trusted-PDA identity workflow.
 
 ### Workforce planning
 
@@ -338,22 +356,22 @@ fresh DB
 
 PostgreSQL uses an advisory lock so two serverless cold starts do not race migrations.
 
-## 10. Event publication roadmap
+## 10. Event distribution
 
-Future scalable event distribution should use the transactional outbox pattern:
+v0.5 implements the transactional outbox pattern:
 
 ```text
-PostgreSQL transaction
-  └─ outbox row
-      └─ publisher
-          └─ event bus
-              ├─ live dashboard
-              ├─ notifications
-              ├─ analytics
-              └─ audit/export
+authoritative PostgreSQL transaction
+  ├─ inventory / task / workforce change
+  └─ outbox event
+       ↓ background dispatcher
+       ├─ Mongo event-stream telemetry (when configured)
+       └─ incident webhook (incident topics, when configured)
 ```
 
-The database transaction remains the accounting source of truth.
+The dispatcher uses retry/backoff and PostgreSQL `FOR UPDATE SKIP LOCKED` so multiple warm instances can safely process the queue. External publication failure is isolated from the business transaction.
+
+Current topics include admin audit changes, worker-state changes, order claims, replenishment completions and operational incidents. SSE/WebSocket consumers remain future projection work.
 
 ## 11. Security model
 
@@ -376,3 +394,14 @@ High-priority future hardening:
 - protected production signing key;
 - broader sensitive-field audit coverage;
 - retention/export controls for HR data.
+
+
+## 12. Observability
+
+v0.5 instruments FastAPI and SQLAlchemy with OpenTelemetry. HTTP request count, server-error count and request-duration histograms are produced in-process and exported through OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is configured. Structured JSON request logs include a generated or propagated `X-Request-ID`.
+
+## 13. PDA realtime boundary
+
+An authenticated PDA emits a heartbeat every five seconds. Dispatch requires a recent online PDA heartbeat, not merely a stale database `ONLINE` flag. While online and idle, Android polls active task/open offers every three seconds so Waiting Orders appear without manual refresh.
+
+Industrial scanner broadcasts and CameraX/ML Kit feed the same ScanBus and therefore the same workflow validation path.

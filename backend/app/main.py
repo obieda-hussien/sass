@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
@@ -22,7 +23,8 @@ from .models import (
 from .schemas import (
     BOHMoveRequest, CancelRequest, CycleCountApplyRequest, CycleCountLineRequest, CycleCountStartRequest,
     DamageRequest, DowntimeRequest, HeartbeatRequest, InventoryMoveRequest, LoginRequest, OrderCreate,
-    AttendanceCreateRequest, ChangePasswordRequest, EmployeeCreateRequest, EmployeeUpdateRequest,
+    AttendanceCreateRequest, ChangePasswordRequest, CompleteFirstLoginRequest,
+    EmployeeCreateRequest, EmployeeUpdateRequest, AdminAccountUpdateRequest, AdminSetPinRequest, AdminDeactivateUserRequest,
     ForgotPasswordRequest, HandoffRequest, PayAdjustmentCreateRequest, PerformanceEventCreateRequest, PromotionRequest,
     PickScanRequest, ReceiveRequest, RecoveryStowRequest, RefreshRequest, RejectOfferRequest,
     ShortPickRequest, StageRequest, SyncBatchRequest, TaskOfferRequest, TemporaryPasswordRequest,
@@ -42,13 +44,18 @@ from .services.operations import (
 )
 from .services.sla import board_target_seconds, effective_elapsed_seconds
 from .services.fulfillment import FulfillmentError, complete_delivery, handoff_task, stage_task, start_pack_rack
+from .services.ops_platform import get_worker_state, update_device_telemetry
+from .services.governance import audit_event
 from .services.workforce import (
     MANAGER_ROLES, WorkforceError, add_pay_adjustment, create_employee, employee_payload,
     issue_temporary_password, payroll_preview, promote_employee, record_attendance, record_performance,
-    request_password_reset, update_employee,
+    request_password_reset, update_employee, revoke_user_sessions, set_employee_pin,
+    soft_delete_employee, update_username, validate_numeric_pin,
 )
 from .telemetry import emit as emit_telemetry, ping as telemetry_ping
 from .ops_router import router as ops_router
+from .observability import configure_observability
+from .services.eventing import outbox_dispatch_loop, outbox_health
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -63,7 +70,22 @@ async def lifespan(app: FastAPI):
                 seed_demo(db)
     finally:
         db.close()
-    yield
+
+    outbox_stop = asyncio.Event()
+    outbox_task = asyncio.create_task(
+        outbox_dispatch_loop(
+            outbox_stop,
+            interval_seconds=float(os.getenv("FULFILLOS_OUTBOX_INTERVAL_SECONDS", "2")),
+        )
+    )
+    try:
+        yield
+    finally:
+        outbox_stop.set()
+        try:
+            await asyncio.wait_for(outbox_task, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            outbox_task.cancel()
 
 
 class ApiPrefixMiddleware:
@@ -85,9 +107,10 @@ class ApiPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
-app = FastAPI(title="FulfillOS", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="FulfillOS", version="0.5.0", lifespan=lifespan)
 app.add_middleware(ApiPrefixMiddleware)
 app.include_router(ops_router)
+configure_observability(app, engine)
 # Router-level fallback for hosting layers that preserve the public /api prefix
 # but adapt the ASGI app in a way that bypasses outer middleware path mutation.
 app.mount("/api", app, name="api-prefix-alias")
@@ -97,16 +120,30 @@ if DASHBOARD_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(DASHBOARD_DIR)), name="static")
 
 
-def actor(authorization: str | None = Header(None), db: Session = Depends(get_db)) -> tuple[User, Device]:
+def authenticated_actor(
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+) -> tuple[User, Device]:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing bearer token")
     auth = authenticate_access(db, authorization[7:])
     if not auth:
         raise HTTPException(401, "Session expired or invalid")
     user, device = auth[0], auth[1]
-    # End the read-only authentication transaction so command handlers can open
-    # their explicit atomic transaction on the same request-scoped session.
     db.commit()
+    return user, device
+
+
+def actor(who=Depends(authenticated_actor)) -> tuple[User, Device]:
+    user, device = who
+    if user.must_change_password:
+        raise HTTPException(
+            428,
+            {
+                "code": "PASSWORD_CHANGE_REQUIRED",
+                "message": "Change the temporary PIN before using warehouse tools.",
+            },
+        )
     return user, device
 
 
@@ -119,7 +156,7 @@ def manager_actor(who=Depends(actor)) -> tuple[User, Device]:
 
 @app.get("/")
 def root():
-    return {"name": "FulfillOS", "version": "0.4.0", "dashboard": "/dashboard"}
+    return {"name": "FulfillOS", "version": "0.5.0", "dashboard": "/dashboard"}
 
 
 @app.get("/health")
@@ -135,9 +172,25 @@ def health():
     telemetry_status = "connected" if telemetry_ping() else "disabled_or_unavailable"
     return {
         "ok": database_status == "connected",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "database": database_status,
         "telemetry": telemetry_status,
+        "server_time": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/admin/system/health")
+def admin_system_health(
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    return {
+        "version": "0.5.0",
+        "database": "connected",
+        "telemetry": "connected" if telemetry_ping() else "disabled_or_unavailable",
+        "outbox": outbox_health(db),
+        "otel_exporter_configured": bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()),
+        "incident_webhook_configured": bool(os.getenv("FULFILLOS_INCIDENT_WEBHOOK_URL", "").strip()),
         "server_time": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -148,6 +201,23 @@ def dashboard_file():
     if not path.exists():
         raise HTTPException(404)
     return FileResponse(path)
+
+
+def session_payload(
+    user: User,
+    device: Device,
+    access_token: str,
+    refresh_token: str,
+) -> dict[str, object]:
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user_id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "device_id": device.id,
+        "must_change_password": bool(user.must_change_password),
+    }
 
 
 @app.post("/auth/login")
@@ -165,14 +235,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
             raise HTTPException(403, "Device is not trusted")
         device.app_version = req.app_version or device.app_version
         access, refresh, _ = issue_session(db, user, device)
-        return {
-            "access_token": access,
-            "refresh_token": refresh,
-            "user_id": user.id,
-            "username": user.username,
-            "role": user.role,
-            "device_id": device.id,
-        }
+        return session_payload(user, device, access, refresh)
 
 
 @app.post("/auth/refresh")
@@ -183,14 +246,8 @@ def refresh(req: RefreshRequest, db: Session = Depends(get_db)):
             raise HTTPException(401, "Refresh rejected")
         access, refresh_token, record = result
         user = db.get(User, record.user_id)
-        return {
-            "access_token": access,
-            "refresh_token": refresh_token,
-            "user_id": user.id,
-            "username": user.username,
-            "role": user.role,
-            "device_id": record.device_id,
-        }
+        device = db.get(Device, record.device_id)
+        return session_payload(user, device, access, refresh_token)
 
 
 @app.post("/auth/forgot-password", status_code=202)
@@ -198,36 +255,96 @@ def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
     # Deliberately generic: never reveal whether a username/email exists.
     with db.begin():
         request_password_reset(db, req.identifier)
-    return {"accepted": True, "message": "If the account exists, a supervisor can issue a temporary password."}
+    return {"accepted": True, "message": "If the account exists, a supervisor can issue a temporary PIN."}
 
 
 @app.post("/auth/change-password")
-def change_password(req: ChangePasswordRequest, who=Depends(actor), db: Session = Depends(get_db)):
-    user, _ = who
+def change_password(
+    req: ChangePasswordRequest,
+    who=Depends(authenticated_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
     with db.begin():
         user = db.get(User, user.id)
         if not user or not verify_password(req.current_password, user.password_hash):
-            raise HTTPException(400, "Current password is incorrect")
-        if req.current_password == req.new_password:
-            raise HTTPException(400, "New password must be different")
-        user.password_hash = hash_password(req.new_password)
-        sessions = db.scalars(select(SessionToken).where(SessionToken.user_id == user.id)).all()
-        for session in sessions:
-            session.revoked = True
-    return {"changed": True, "reauthentication_required": True}
+            raise HTTPException(400, "Current PIN is incorrect")
+        new_pin = validate_numeric_pin(req.new_password)
+        if verify_password(new_pin, user.password_hash):
+            raise HTTPException(400, "New PIN must be different")
+        user.password_hash = hash_password(new_pin)
+        user.must_change_password = False
+        revoke_user_sessions(db, user.id)
+        access, refresh_token, _ = issue_session(db, user, device)
+        audit_event(
+            db,
+            actor_user_id=user.id,
+            action="CHANGE_OWN_PIN",
+            entity_type="USER",
+            entity_id=user.id,
+            new_value={"must_change_password": False},
+        )
+        return {
+            "changed": True,
+            "reauthentication_required": False,
+            "session": session_payload(user, device, access, refresh_token),
+        }
+
+
+@app.post("/auth/complete-first-login")
+def complete_first_login(
+    req: CompleteFirstLoginRequest,
+    who=Depends(authenticated_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
+    if not user.must_change_password:
+        raise HTTPException(409, {"code": "PIN_ALREADY_PERSONAL", "message": "PIN change is not required."})
+    with db.begin():
+        user = db.get(User, user.id)
+        new_pin = validate_numeric_pin(req.new_password)
+        if verify_password(new_pin, user.password_hash):
+            raise HTTPException(400, "Choose a PIN different from the temporary PIN")
+        user.password_hash = hash_password(new_pin)
+        user.must_change_password = False
+        revoke_user_sessions(db, user.id)
+        access, refresh_token, _ = issue_session(db, user, device)
+        audit_event(
+            db,
+            actor_user_id=user.id,
+            action="COMPLETE_FIRST_LOGIN",
+            entity_type="USER",
+            entity_id=user.id,
+            new_value={"must_change_password": False},
+        )
+        return {
+            "changed": True,
+            "session": session_payload(user, device, access, refresh_token),
+        }
 
 
 @app.post("/devices/heartbeat")
 def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(get_db)):
     user, device = who
     with db.begin():
+        now = datetime.now(timezone.utc)
         device = db.get(Device, device.id)
-        device.last_seen_at = datetime.now(timezone.utc)
+        device.last_seen_at = now
         device.last_user_id = user.id
-        device.status = req.connectivity
+        device.status = req.connectivity.strip().upper()
         device.app_version = req.app_version or device.app_version
+        update_device_telemetry(
+            db,
+            device.id,
+            battery_percent=req.battery_percent,
+            connectivity=device.status,
+            last_location_id=req.last_location_id,
+            activity=req.activity,
+        )
         active = active_task_for_actor(db, user.id, device.id)
         current_task_id = active.id if active else None
+        worker_state = get_worker_state(db, user.id, create=True)
+        worker_state_name = worker_state.state if worker_state else "OFFLINE"
     mismatch = bool(req.current_task_id and req.current_task_id != current_task_id)
     emit_telemetry(
         "device_health",
@@ -239,6 +356,10 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
             "current_task_id": current_task_id,
             "client_reported_task_id": req.current_task_id,
             "task_mismatch": mismatch,
+            "worker_state": worker_state_name,
+            "activity": req.activity,
+            "battery_percent": req.battery_percent,
+            "last_location_id": req.last_location_id,
             "observed_at": datetime.now(timezone.utc),
         },
     )
@@ -248,6 +369,7 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
         "current_task_id": current_task_id,
         "client_reported_task_id": req.current_task_id,
         "task_mismatch": mismatch,
+        "worker_state": worker_state_name,
     }
 
 
@@ -838,7 +960,12 @@ def dashboard_summary(db: Session = Depends(get_db)):
             active.append(snap)
     return {
         "task_counts": counts,
-        "devices_online": db.scalar(select(func.count()).select_from(Device).where(Device.status == "ONLINE")) or 0,
+        "devices_online": db.scalar(
+            select(func.count()).select_from(Device).where(
+                Device.status == "ONLINE",
+                Device.last_seen_at >= datetime.now(timezone.utc) - timedelta(seconds=15),
+            )
+        ) or 0,
         "orders_recovery_required": db.scalar(select(func.count()).select_from(Order).where(Order.recovery_required == True)) or 0,  # noqa: E712
         "active_tasks": active,
     }
@@ -863,6 +990,18 @@ def admin_create_employee(req: EmployeeCreateRequest, who=Depends(manager_actor)
             payload = employee_payload(db, user)
             payload["temporary_password"] = generated_password
             payload["created_by"] = manager.id
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="CREATE_EMPLOYEE",
+                entity_type="USER",
+                entity_id=user.id,
+                new_value={
+                    "username": user.username,
+                    "role": user.role,
+                    "employee_code": payload["profile"]["employee_code"] if payload.get("profile") else None,
+                },
+            )
             return payload
     except WorkforceError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
@@ -877,14 +1016,155 @@ def admin_employee_detail(user_id: str, period: str | None = None, who=Depends(m
 
 
 @app.patch("/admin/employees/{user_id}")
-def admin_update_employee(user_id: str, req: EmployeeUpdateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+def admin_update_employee(
+    user_id: str,
+    req: EmployeeUpdateRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
     try:
         with db.begin():
             user = db.get(User, user_id)
             if not user:
                 raise HTTPException(404, "Employee not found")
+            before = employee_payload(db, user)
             update_employee(db, user, req)
-            return employee_payload(db, user)
+            after = employee_payload(db, user)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="UPDATE_EMPLOYEE",
+                entity_type="USER",
+                entity_id=user.id,
+                old_value={"role": before["role"], "active": before["active"], "profile": before["profile"]},
+                new_value={"role": after["role"], "active": after["active"], "profile": after["profile"]},
+            )
+            return after
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.get("/admin/usernames/{username}/availability")
+def admin_username_availability(
+    username: str,
+    exclude_user_id: str | None = None,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    query = select(User).where(func.lower(User.username) == username.strip().lower())
+    if exclude_user_id:
+        query = query.where(User.id != exclude_user_id)
+    return {"username": username.strip(), "available": db.scalar(query) is None}
+
+
+@app.patch("/admin/employees/{user_id}/account")
+def admin_update_account(
+    user_id: str,
+    req: AdminAccountUpdateRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    try:
+        with db.begin():
+            user = db.get(User, user_id)
+            if not user:
+                raise HTTPException(404, "Employee not found")
+            old_username, new_username = update_username(db, user, req.username)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="CHANGE_USERNAME",
+                entity_type="USER",
+                entity_id=user.id,
+                field_name="username",
+                old_value=old_username,
+                new_value=new_username,
+            )
+            return {
+                "user_id": user.id,
+                "username": user.username,
+                "sessions_revoked": True,
+            }
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.post("/admin/employees/{user_id}/set-pin")
+def admin_set_employee_pin(
+    user_id: str,
+    req: AdminSetPinRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    if manager.id == user_id:
+        raise HTTPException(409, {"code": "USE_SELF_SERVICE_PIN_CHANGE", "message": "Use the normal change-PIN flow for your own account."})
+    try:
+        with db.begin():
+            user = db.get(User, user_id)
+            if not user or user.deleted_at is not None:
+                raise HTTPException(404, "Employee not found")
+            pin = set_employee_pin(
+                db,
+                user,
+                pin=req.password,
+                require_change_on_next_login=req.require_change_on_next_login,
+            )
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="ADMIN_SET_PIN",
+                entity_type="USER",
+                entity_id=user.id,
+                new_value={"must_change_password": user.must_change_password},
+                reason="Emergency/admin credential reset",
+            )
+            return {
+                "user_id": user.id,
+                "temporary_password": pin,
+                "must_change_password": user.must_change_password,
+                "sessions_revoked": True,
+                "warning": "Shown once. Share securely.",
+            }
+    except WorkforceError as e:
+        raise HTTPException(409, {"code": e.code, "message": str(e)})
+
+
+@app.delete("/admin/employees/{user_id}")
+def admin_delete_employee(
+    user_id: str,
+    req: AdminDeactivateUserRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
+    if manager.id == user_id:
+        raise HTTPException(409, {"code": "SELF_DELETE_FORBIDDEN", "message": "You cannot delete your own active manager account."})
+    try:
+        with db.begin():
+            user = db.get(User, user_id)
+            if not user:
+                raise HTTPException(404, "Employee not found")
+            before = {"active": user.active, "deleted_at": user.deleted_at, "username": user.username}
+            soft_delete_employee(db, user, reason=req.reason)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="DELETE_EMPLOYEE",
+                entity_type="USER",
+                entity_id=user.id,
+                old_value=before,
+                new_value={"active": user.active, "deleted_at": user.deleted_at},
+                reason=req.reason,
+            )
+            return {
+                "user_id": user.id,
+                "deleted": True,
+                "active": user.active,
+                "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None,
+            }
     except WorkforceError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
 
@@ -911,6 +1191,16 @@ def admin_promote_employee(
                 new_base_salary_cents=req.new_base_salary_cents,
                 effective_at=req.effective_at,
             )
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="PROMOTE_EMPLOYEE",
+                entity_type="USER",
+                entity_id=user.id,
+                old_value={"role": record.from_role, "base_salary_cents": record.old_base_salary_cents},
+                new_value={"role": record.to_role, "base_salary_cents": record.new_base_salary_cents},
+                reason=record.reason,
+            )
             return {
                 "promotion_id": record.id,
                 "user_id": user.id,
@@ -935,6 +1225,19 @@ def admin_add_attendance(user_id: str, req: AttendanceCreateRequest, who=Depends
             if not db.get(EmployeeProfile, user_id):
                 raise HTTPException(404, "Employee not found")
             entry = record_attendance(db, user_id, req, manager.id)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="ADD_ATTENDANCE",
+                entity_type="ATTENDANCE",
+                entity_id=entry.id,
+                new_value={
+                    "user_id": user_id,
+                    "late_minutes": entry.late_minutes,
+                    "overtime_minutes": entry.overtime_minutes,
+                    "status": entry.status,
+                },
+            )
             return {
                 "id": entry.id,
                 "late_minutes": entry.late_minutes,
@@ -946,11 +1249,33 @@ def admin_add_attendance(user_id: str, req: AttendanceCreateRequest, who=Depends
 
 
 @app.post("/admin/employees/{user_id}/performance-events", status_code=201)
-def admin_add_performance_event(user_id: str, req: PerformanceEventCreateRequest, who=Depends(manager_actor), db: Session = Depends(get_db)):
+def admin_add_performance_event(
+    user_id: str,
+    req: PerformanceEventCreateRequest,
+    who=Depends(manager_actor),
+    db: Session = Depends(get_db),
+):
+    manager, _ = who
     with db.begin():
         if not db.get(EmployeeProfile, user_id):
             raise HTTPException(404, "Employee not found")
         event = record_performance(db, user_id, req)
+        audit_event(
+            db,
+            actor_user_id=manager.id,
+            action="ADD_PERFORMANCE_EVENT",
+            entity_type="PERFORMANCE_EVENT",
+            entity_id=event.id,
+            new_value={
+                "user_id": user_id,
+                "event_type": event.event_type,
+                "order_id": event.order_id,
+                "task_id": event.task_id,
+                "minutes": event.minutes,
+                "source": event.source,
+            },
+            reason=event.notes,
+        )
         return {"id": event.id, "event_type": event.event_type, "occurred_at": event.occurred_at.isoformat()}
 
 
@@ -961,6 +1286,20 @@ def admin_add_pay_adjustment(user_id: str, req: PayAdjustmentCreateRequest, who=
         if not db.get(EmployeeProfile, user_id):
             raise HTTPException(404, "Employee not found")
         item = add_pay_adjustment(db, user_id, req, manager.id)
+        audit_event(
+            db,
+            actor_user_id=manager.id,
+            action="ADD_PAY_ADJUSTMENT",
+            entity_type="PAY_ADJUSTMENT",
+            entity_id=item.id,
+            new_value={
+                "user_id": user_id,
+                "kind": item.kind,
+                "amount_cents": item.amount_cents,
+                "approved": item.approved,
+            },
+            reason=item.reason,
+        )
         return {
             "id": item.id,
             "kind": item.kind,
@@ -1010,10 +1349,19 @@ def admin_issue_temporary_password(reset_id: str, req: TemporaryPasswordRequest,
             if not reset or reset.status != "PENDING":
                 raise HTTPException(404, "Pending reset request not found")
             password = issue_temporary_password(db, reset, manager.id, req.password)
+            audit_event(
+                db,
+                actor_user_id=manager.id,
+                action="ISSUE_TEMPORARY_PIN",
+                entity_type="USER",
+                entity_id=reset.user_id,
+                new_value={"must_change_password": True},
+                reason="Password reset request resolved",
+            )
             return {
                 "resolved": True,
                 "temporary_password": password,
-                "warning": "Shown once. Give it to the employee securely and ask them to change it after login.",
+                "warning": "Shown once. Temporary PINs are six digits; give it to the employee securely and ask them to change it after login.",
             }
     except WorkforceError as e:
         raise HTTPException(409, {"code": e.code, "message": str(e)})
@@ -1069,12 +1417,21 @@ def control_tower_compat_summary(db: Session = Depends(get_db)):
         associate_states[state] += 1
 
     device_state_by_user: dict[str, str] = {}
+    live_cutoff = datetime.now(timezone.utc) - timedelta(seconds=15)
     for device in devices:
         if not device.last_user_id:
             continue
+        last_seen = device.last_seen_at
+        if last_seen and last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        fresh_online = (
+            device.status == "ONLINE"
+            and last_seen is not None
+            and last_seen >= live_cutoff
+        )
         current = device_state_by_user.get(device.last_user_id)
         if current != "ONLINE":
-            device_state_by_user[device.last_user_id] = "ONLINE" if device.status == "ONLINE" else "OFFLINE"
+            device_state_by_user[device.last_user_id] = "ONLINE" if fresh_online else "OFFLINE"
 
     for user_id, device_state in device_state_by_user.items():
         if user_id in active_by_user:

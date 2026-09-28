@@ -75,8 +75,8 @@ export default function ControlTowerPage() {
           <p className="eyebrow">FULFILLOS · LIVE OPERATIONS</p>
           <h1>Control Tower</h1>
           <p className="subtitle">
-            Server-confirmed warehouse state. Five-second refresh. Recovery is visible,
-            never silently discarded.
+            Live warehouse overview plus direct entry points to the exact task you need.
+            Server-confirmed state refreshes every five seconds.
           </p>
         </div>
         <div className="headerActions">
@@ -120,6 +120,30 @@ export default function ControlTowerPage() {
           <strong>{summary?.recoveryRequired.length ?? "—"}</strong>
           <small>Needs explicit supervisor resolution</small>
         </article>
+      </section>
+
+      <section className="panel moduleGuide">
+        <div className="panelHeading">
+          <div>
+            <p className="eyebrow">QUICK ACTIONS</p>
+            <h2>Where do I do what?</h2>
+          </div>
+          <span className="chip">Start here</span>
+        </div>
+        <p className="sectionHelp">
+          Choose the job, not the page. These links jump directly to the right operational section.
+        </p>
+        <div className="moduleGrid">
+          <a className="moduleCard" href="/operations#dispatch"><span className="moduleTag">LIVE</span><strong>Assign / monitor orders</strong><small>See online pickers, active work and manually assign an unowned order.</small></a>
+          <a className="moduleCard" href="/operations#orders"><span className="moduleTag">SEARCH</span><strong>Find an order or SPOO</strong><small>Search by order ID, picker, full SPOO/last digits or time window.</small></a>
+          <a className="moduleCard" href="/operations#availability"><span className="moduleTag">CONTROL</span><strong>Pause a zone / freezer / chiller</strong><small>Stop new fulfillment from a domain, zone, aisle, bin or SKU without changing physical stock.</small></a>
+          <a className="moduleCard" href="/operations#replenishment"><span className="moduleTag">STOCK</span><strong>Replenishment</strong><small>Generate and monitor low-pick-face replenishment tasks.</small></a>
+          <a className="moduleCard" href="/operations#inbound"><span className="moduleTag">INBOUND</span><strong>Receive & stow</strong><small>Watch shipment receiving, damaged/missing quantities and cold-chain stow timing.</small></a>
+          <a className="moduleCard" href="/people#onboarding"><span className="moduleTag">PEOPLE</span><strong>Add a new employee</strong><small>Create account, PIN, contact details, role and payroll basics.</small></a>
+          <a className="moduleCard" href="/people#team"><span className="moduleTag">TEAM</span><strong>Manage / promote employee</strong><small>Open employee details, promotion history, attendance and approved adjustments.</small></a>
+          <a className="moduleCard" href="/people#schedule"><span className="moduleTag">ROTA</span><strong>Build the shift schedule</strong><small>Create shift templates and assign employees to dated shifts.</small></a>
+          <a className="moduleCard" href="/system"><span className="moduleTag">ADMIN</span><strong>Audit, permissions & system health</strong><small>Inspect sensitive changes, outbox/telemetry health and explicit access overrides.</small></a>
+        </div>
       </section>
 
       <section className="panelGrid">

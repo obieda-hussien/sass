@@ -47,6 +47,7 @@ from ..models_ops import (
     WorkerStateEvent,
 )
 from .compatibility import storage_compatible
+from .eventing import enqueue_outbox
 from .inventory import InventoryError, move_inventory
 from .ops_optimization import (
     destination_has_capacity,
@@ -55,6 +56,8 @@ from .ops_optimization import (
     worker_domain_reasons,
 )
 
+
+PDA_PRESENCE_TTL_SECONDS = 20
 
 ACTIVE_PICK_STATES = {
     TaskStatus.OFFERED.value,
@@ -202,14 +205,29 @@ def set_worker_state(
     state.activity_ref = activity_ref
     state.reason = reason
     state.updated_at = now_utc()
-    db.add(WorkerStateEvent(
+    event = WorkerStateEvent(
         user_id=user_id,
         from_state=previous,
         to_state=normalized,
         activity_ref=activity_ref,
         reason=reason,
-    ))
+    )
+    db.add(event)
     db.flush()
+    enqueue_outbox(
+        db,
+        topic="worker.state.changed",
+        aggregate_type="USER",
+        aggregate_id=user_id,
+        payload={
+            "worker_state_event_id": event.id,
+            "from_state": previous,
+            "to_state": normalized,
+            "activity_ref": activity_ref,
+            "reason": reason,
+            "occurred_at": event.created_at,
+        },
+    )
     return state
 
 
@@ -243,6 +261,22 @@ def worker_dispatch_status(db: Session, user: User, task: PickTask | None = None
         reasons.append("USER_INACTIVE")
     if user.role.upper() not in PICKER_ROLES:
         reasons.append("NOT_PICKER")
+
+    latest_device = db.scalar(
+        select(Device)
+        .where(Device.last_user_id == user.id)
+        .order_by(Device.last_seen_at.desc())
+        .limit(1)
+    )
+    live_cutoff = now_utc() - timedelta(seconds=PDA_PRESENCE_TTL_SECONDS)
+    if latest_device is None or latest_device.last_seen_at is None:
+        reasons.append("PDA_NOT_CONNECTED")
+    else:
+        last_seen = latest_device.last_seen_at
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        if latest_device.status != "ONLINE" or last_seen < live_cutoff:
+            reasons.append("PDA_OFFLINE_OR_STALE")
     if state and state.state != "AVAILABLE":
         # A direct assignment reserves the worker for that exact task.
         if not (
@@ -275,6 +309,9 @@ def worker_dispatch_status(db: Session, user: User, task: PickTask | None = None
         "qualifications": sorted(worker_qualifications(db, user.id)),
         "active_task_id": active_task.id if active_task else None,
         "estimated_walk_to_first_item_m": estimated_walk,
+        "device_id": latest_device.id if latest_device else None,
+        "device_last_seen_at": latest_device.last_seen_at.isoformat() if latest_device and latest_device.last_seen_at else None,
+        "device_live": not any(reason in {"PDA_NOT_CONNECTED", "PDA_OFFLINE_OR_STALE"} for reason in reasons),
     }
 
 
@@ -328,21 +365,75 @@ def broadcast_task(db: Session, task: PickTask, *, ttl_seconds: int = 90) -> dic
 
 def my_open_offers(db: Session, user_id: str) -> list[PickOffer]:
     now = now_utc()
-    offers = db.scalars(
+
+    # Close stale offers first.
+    existing_offers = db.scalars(
         select(PickOffer)
         .where(PickOffer.user_id == user_id, PickOffer.status == "OPEN")
         .order_by(PickOffer.offered_at)
     ).all()
-    result = []
-    for offer in offers:
+    for offer in existing_offers:
         if offer.expires_at and _utc(offer.expires_at) <= now:
             offer.status = "EXPIRED"
             offer.closed_at = now
-        else:
-            result.append(offer)
-    db.flush()
-    return result
 
+    # A picker may come online after an order was originally broadcast. Polling
+    # the waiting queue therefore backfills an offer for currently eligible,
+    # unowned READY/OFFERED work instead of requiring a manual refresh/rebroadcast.
+    user = db.get(User, user_id)
+    if user is not None and worker_dispatch_status(db, user)["dispatchable"]:
+        candidates = db.execute(
+            select(PickTask, Order)
+            .join(Order, Order.id == PickTask.order_id)
+            .where(
+                PickTask.assigned_user_id.is_(None),
+                PickTask.status.in_([TaskStatus.READY.value, TaskStatus.OFFERED.value]),
+            )
+            .order_by(Order.priority.desc(), Order.created_at.asc())
+            .limit(20)
+        ).all()
+        for task, order in candidates:
+            if not worker_dispatch_status(db, user, task)["dispatchable"]:
+                continue
+            offer = db.scalar(
+                select(PickOffer).where(
+                    PickOffer.task_id == task.id,
+                    PickOffer.user_id == user_id,
+                )
+            )
+            if offer is None:
+                offer = PickOffer(
+                    task_id=task.id,
+                    user_id=user_id,
+                    status="OPEN",
+                    offered_at=now,
+                    expires_at=now + timedelta(seconds=90),
+                )
+                db.add(offer)
+            elif offer.status != "OPEN" or (
+                offer.expires_at is not None and _utc(offer.expires_at) <= now
+            ):
+                offer.status = "OPEN"
+                offer.offered_at = now
+                offer.expires_at = now + timedelta(seconds=90)
+                offer.closed_at = None
+
+            if task.status == TaskStatus.READY.value:
+                task.status = TaskStatus.OFFERED.value
+                task.offered_at = now
+                task.server_version += 1
+                order.status = OrderStatus.OFFERED.value
+
+    db.flush()
+    return db.scalars(
+        select(PickOffer)
+        .where(
+            PickOffer.user_id == user_id,
+            PickOffer.status == "OPEN",
+            or_(PickOffer.expires_at.is_(None), PickOffer.expires_at > now),
+        )
+        .order_by(PickOffer.offered_at)
+    ).all()
 
 def _acquire_lease(
     db: Session,
@@ -451,6 +542,19 @@ def claim_task(db: Session, task: PickTask, user_id: str, device_id: str) -> Pic
     if order:
         order.status = OrderStatus.PICKING.value
     db.flush()
+    enqueue_outbox(
+        db,
+        topic="order.claimed",
+        aggregate_type="PICK_TASK",
+        aggregate_id=task.id,
+        payload={
+            "task_id": task.id,
+            "order_id": task.order_id,
+            "user_id": user_id,
+            "device_id": device_id,
+            "claimed_at": now,
+        },
+    )
     db.expire(task)
     return db.get(PickTask, task.id)
 
@@ -1059,7 +1163,8 @@ def shortage_side_effects(
                 ),
             )
             db.add(alert)
-            db.add(OperationalIncident(
+            db.flush()
+            incident = OperationalIncident(
                 incident_type="REPEATED_SHORTAGE",
                 severity="HIGH",
                 site_id=(db.get(Location, item.source_location_id).site_id if db.get(Location, item.source_location_id) else "DEMO"),
@@ -1074,7 +1179,24 @@ def shortage_side_effects(
                     },
                     separators=(",", ":"),
                 ),
-            ))
+            )
+            db.add(incident)
+            db.flush()
+            enqueue_outbox(
+                db,
+                topic="incident.created",
+                aggregate_type="OPERATIONAL_INCIDENT",
+                aggregate_id=incident.id,
+                payload={
+                    "incident_type": incident.incident_type,
+                    "severity": incident.severity,
+                    "site_id": incident.site_id,
+                    "scope_type": incident.scope_type,
+                    "scope_value": incident.scope_value,
+                    "source_ref": incident.source_ref,
+                    "details": json.loads(incident.details_json),
+                },
+            )
 
     existing_replenishment = db.scalar(
         select(ReplenishmentTask).where(
@@ -1464,6 +1586,7 @@ def update_device_telemetry(
     battery_percent: int | None,
     connectivity: str | None,
     last_location_id: str | None,
+    activity: str | None = None,
 ) -> DeviceTelemetry:
     row = db.get(DeviceTelemetry, device_id)
     if row is None:
@@ -1475,6 +1598,8 @@ def update_device_telemetry(
         row.connectivity = connectivity.strip().upper()
     if last_location_id is not None:
         row.last_location_id = last_location_id.strip().upper()
+    if activity is not None:
+        row.activity = activity.strip().upper()[:80]
     row.updated_at = now_utc()
     db.flush()
     return row

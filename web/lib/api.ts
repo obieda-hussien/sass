@@ -1,3 +1,35 @@
+export type AuditEvent = {
+  id: string;
+  actor_user_id: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  field_name: string | null;
+  old_value_json: string | null;
+  new_value_json: string | null;
+  reason: string | null;
+  request_id: string | null;
+  created_at: string;
+};
+
+export type EffectivePermissions = {
+  user_id: string;
+  role: string;
+  permissions: string[];
+  role_overrides: Array<{ permission: string; allowed: boolean }>;
+  user_overrides: Array<{ permission: string; allowed: boolean }>;
+};
+
+export type SystemHealth = {
+  version: string;
+  database: string;
+  telemetry: string;
+  outbox: { pending: number; published: number; failed: number };
+  otel_exporter_configured: boolean;
+  incident_webhook_configured: boolean;
+  server_time: string;
+};
+
 export type Summary = {
   associates: Record<string, number>;
   tasks: Record<string, number>;
@@ -66,6 +98,8 @@ export type Employee = {
   username: string;
   role: string;
   active: boolean;
+  must_change_password: boolean;
+  deleted_at: string | null;
   profile: {
     employee_code: string;
     full_name: string;
@@ -97,17 +131,33 @@ export type PasswordResetItem = {
   status: string;
 };
 
+function browserCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = `${name}=`;
+  for (const part of document.cookie.split(";")) {
+    const value = part.trim();
+    if (value.startsWith(prefix)) return decodeURIComponent(value.slice(prefix.length));
+  }
+  return null;
+}
+
 async function jsonRequest<T>(
   path: string,
   init: RequestInit = {},
-  token?: string,
+  _session?: string,
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(apiUrl(path), {
+  const method = (init.method ?? "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = browserCookie("fo_csrf");
+    if (csrf) headers.set("X-CSRF-Token", csrf);
+  }
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  const response = await fetch(`/web-api${normalized}`, {
     ...init,
     headers,
+    credentials: "same-origin",
     cache: "no-store",
   });
   const body = await response.json().catch(() => ({}));
@@ -123,19 +173,51 @@ async function jsonRequest<T>(
 }
 
 export async function managerLogin(username: string, password: string) {
-  return jsonRequest<{
-    access_token: string;
-    refresh_token: string;
+  const response = await fetch("/web-auth/login", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+    cache: "no-store",
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = body?.detail;
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : detail?.message ?? body?.message ?? `Login failed: ${response.status}`,
+    );
+  }
+  return body as {
+    authenticated: true;
+    user_id: string;
     username: string;
     role: string;
-  }>("/auth/login", {
+  };
+}
+
+export async function getWebSession() {
+  const response = await fetch("/web-auth/session", {
+    method: "GET",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) return { authenticated: false as const };
+  return response.json() as Promise<{
+    authenticated: true;
+    user_id: string;
+    username: string;
+    role: string;
+    device_id: string;
+  }>;
+}
+
+export async function managerLogout() {
+  await fetch("/web-auth/logout", {
     method: "POST",
-    body: JSON.stringify({
-      username,
-      password,
-      device_id: "WEB-CONTROL-TOWER",
-      app_version: "web-0.2.1",
-    }),
+    credentials: "same-origin",
+    cache: "no-store",
   });
 }
 
@@ -176,6 +258,69 @@ export async function issueTemporaryPassword(token: string, resetId: string) {
     `/admin/password-resets/${resetId}/issue-temporary-password`,
     { method: "POST", body: JSON.stringify({}) },
     token,
+  );
+}
+
+
+export async function usernameAvailability(
+  session: string,
+  username: string,
+  excludeUserId?: string,
+) {
+  const search = new URLSearchParams();
+  if (excludeUserId) search.set("exclude_user_id", excludeUserId);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return jsonRequest<{ username: string; available: boolean }>(
+    `/admin/usernames/${encodeURIComponent(username)}/availability${suffix}`,
+    {},
+    session,
+  );
+}
+
+export async function updateEmployeeAccount(
+  session: string,
+  userId: string,
+  username: string,
+) {
+  return jsonRequest<{ user_id: string; username: string; sessions_revoked: boolean }>(
+    `/admin/employees/${encodeURIComponent(userId)}/account`,
+    { method: "PATCH", body: JSON.stringify({ username }) },
+    session,
+  );
+}
+
+export async function setEmployeePin(
+  session: string,
+  userId: string,
+  payload: { password?: string | null; require_change_on_next_login?: boolean },
+) {
+  return jsonRequest<{
+    user_id: string;
+    temporary_password: string;
+    must_change_password: boolean;
+    sessions_revoked: boolean;
+    warning: string;
+  }>(
+    `/admin/employees/${encodeURIComponent(userId)}/set-pin`,
+    { method: "POST", body: JSON.stringify(payload) },
+    session,
+  );
+}
+
+export async function deleteEmployee(
+  session: string,
+  userId: string,
+  reason: string,
+) {
+  return jsonRequest<{
+    user_id: string;
+    deleted: boolean;
+    active: boolean;
+    deleted_at: string | null;
+  }>(
+    `/admin/employees/${encodeURIComponent(userId)}`,
+    { method: "DELETE", body: JSON.stringify({ reason }) },
+    session,
   );
 }
 
@@ -290,6 +435,7 @@ export type DispatchWorker = {
     battery_percent: number | null;
     connectivity: string | null;
     last_location_id: string | null;
+    activity: string | null;
     updated_at: string;
   } | null;
 };
@@ -513,5 +659,190 @@ export async function updatePayrollPolicy(
     `/ops/payroll-policy/${encodeURIComponent(userId)}`,
     { method: "PUT", body: JSON.stringify(payload) },
     token,
+  );
+}
+
+
+export type ReplenishmentTask = {
+  id: string;
+  product_id: string;
+  asin: string | null;
+  title: string;
+  source_location_id: string;
+  destination_location_id: string;
+  qty: number;
+  actual_qty: number;
+  status: string;
+  trigger: string;
+  priority: number;
+  assigned_user_id: string | null;
+  source_available_qty: number;
+  destination_on_hand: number;
+  created_at: string;
+};
+
+export async function getReplenishmentQueue(token: string) {
+  return jsonRequest<{ tasks: ReplenishmentTask[] }>(
+    "/ops/replenishment/queue",
+    {},
+    token,
+  );
+}
+
+export async function generateReplenishment(
+  token: string,
+  lowStockThreshold = 3,
+  targetQty = 12,
+) {
+  return jsonRequest<{ created: number; tasks: ReplenishmentTask[] }>(
+    "/ops/replenishment/generate",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        low_stock_threshold: lowStockThreshold,
+        target_qty: targetQty,
+        max_new_tasks: 100,
+      }),
+    },
+    token,
+  );
+}
+
+export type ShiftTemplate = {
+  id: string;
+  site_id: string;
+  name: string;
+  start_minute: number;
+  end_minute: number;
+  timezone_name: string;
+  break_minutes: number;
+  grace_minutes: number;
+  active: boolean;
+};
+
+export type ShiftAssignment = {
+  id: string;
+  user_id: string;
+  username: string | null;
+  shift_date: string;
+  template_id: string | null;
+  template_name: string | null;
+  scheduled_start_at: string;
+  scheduled_end_at: string;
+  status: string;
+  notes: string | null;
+};
+
+export async function getShiftTemplates(token: string) {
+  return jsonRequest<{ templates: ShiftTemplate[] }>(
+    "/ops/shifts/templates",
+    {},
+    token,
+  );
+}
+
+export async function createShiftTemplate(
+  token: string,
+  payload: {
+    site_id?: string;
+    name: string;
+    start_minute: number;
+    end_minute: number;
+    timezone_name?: string;
+    break_minutes: number;
+    grace_minutes: number;
+  },
+) {
+  return jsonRequest<ShiftTemplate>(
+    "/ops/shifts/templates",
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+export async function getRoster(
+  token: string,
+  from: string,
+  to: string,
+  userId?: string,
+) {
+  const q = new URLSearchParams({ from, to });
+  if (userId) q.set("user_id", userId);
+  return jsonRequest<{ assignments: ShiftAssignment[] }>(
+    `/ops/shifts/roster?${q.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function assignShift(
+  token: string,
+  payload: {
+    user_id: string;
+    shift_template_id: string;
+    shift_date: string;
+    notes?: string | null;
+  },
+) {
+  return jsonRequest<ShiftAssignment>(
+    "/ops/shifts/assignments",
+    { method: "POST", body: JSON.stringify(payload) },
+    token,
+  );
+}
+
+
+export async function getSystemHealth(session: string) {
+  return jsonRequest<SystemHealth>("/admin/system/health", {}, session);
+}
+
+export async function getAuditEvents(
+  session: string,
+  params: { entity_type?: string; entity_id?: string; limit?: number } = {},
+) {
+  const search = new URLSearchParams();
+  if (params.entity_type) search.set("entity_type", params.entity_type);
+  if (params.entity_id) search.set("entity_id", params.entity_id);
+  search.set("limit", String(params.limit ?? 100));
+  return jsonRequest<{ events: AuditEvent[] }>(
+    `/ops/audit?${search.toString()}`,
+    {},
+    session,
+  );
+}
+
+export async function getMyPermissions(session: string) {
+  return jsonRequest<EffectivePermissions>("/ops/permissions/me", {}, session);
+}
+
+export async function setRolePermission(
+  session: string,
+  role: string,
+  permission: string,
+  allowed: boolean,
+) {
+  return jsonRequest<{ role: string; permission: string; allowed: boolean }>(
+    `/ops/permissions/roles/${encodeURIComponent(role)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ permission, allowed }),
+    },
+    session,
+  );
+}
+
+export async function setUserPermission(
+  session: string,
+  userId: string,
+  permission: string,
+  allowed: boolean,
+) {
+  return jsonRequest<{ user_id: string; permission: string; allowed: boolean }>(
+    `/ops/permissions/users/${encodeURIComponent(userId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ permission, allowed }),
+    },
+    session,
   );
 }

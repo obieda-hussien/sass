@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from app.models import EmployeeProfile, InventoryBalance, Order, OrderLine, PickTaskItem, Product, User
+from app.models import Device, EmployeeProfile, InventoryBalance, Order, OrderLine, PickTaskItem, Product, User
 from app.models_ops import InventoryAlert, ReplenishmentTask, StowTask
 from app.services.allocation import allocate_order
 from app.services.ops_platform import (
@@ -87,6 +87,14 @@ def test_first_claim_wins_and_picker_cannot_hold_second_order(db):
         picker2 = User(username="picker2", password_hash="not-used", role="PICKER")
         db.add(picker2)
         db.flush()
+        db.add(Device(
+            id="PDA-DEMO-002",
+            trusted=True,
+            app_version="0.5.0-test",
+            last_user_id=picker2.id,
+            last_seen_at=datetime.now(timezone.utc),
+            status="ONLINE",
+        ))
         set_worker_state(db, picker1.id, "AVAILABLE", force=True)
         set_worker_state(db, picker2.id, "AVAILABLE", force=True)
 

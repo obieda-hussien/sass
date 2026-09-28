@@ -286,6 +286,7 @@ class DeviceTelemetry(Base):
     battery_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     connectivity: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
     last_location_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    activity: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
@@ -531,4 +532,20 @@ class PromotionRecord(Base):
     new_base_salary_cents: Mapped[int] = mapped_column(Integer, default=0)
     effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     approved_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    topic: Mapped[str] = mapped_column(String(100), index=True)
+    aggregate_type: Mapped[str] = mapped_column(String(80), index=True)
+    aggregate_id: Mapped[str] = mapped_column(String(120), index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

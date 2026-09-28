@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -41,6 +42,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.content.ContextCompat
+import com.obieda.fulfillos.data.ScannerBroadcastReceiver
+import com.obieda.fulfillos.data.ScannerIntentAdapter
 import com.obieda.fulfillos.domain.AppScreen
 import com.obieda.fulfillos.domain.ConnectivityState
 import com.obieda.fulfillos.domain.LocationParser
@@ -53,6 +57,30 @@ import java.time.Duration
 import java.time.Instant
 
 class MainActivity : ComponentActivity() {
+    private val scannerReceiver = ScannerBroadcastReceiver()
+    private var scannerReceiverRegistered = false
+
+    override fun onStart() {
+        super.onStart()
+        if (!scannerReceiverRegistered) {
+            ContextCompat.registerReceiver(
+                this,
+                scannerReceiver,
+                ScannerIntentAdapter.filter(),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            scannerReceiverRegistered = true
+        }
+    }
+
+    override fun onStop() {
+        if (scannerReceiverRegistered) {
+            runCatching { unregisterReceiver(scannerReceiver) }
+            scannerReceiverRegistered = false
+        }
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val graph = (application as FulfillApplication).graph
@@ -83,6 +111,13 @@ private fun FulfillApp(vm: AppViewModel) {
         return
     }
 
+    if (vm.session?.mustChangePassword == true) {
+        ForcePersonalPinScreen(vm)
+        return
+    }
+
+    var cameraOpen by remember { mutableStateOf(false) }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -94,6 +129,7 @@ private fun FulfillApp(vm: AppViewModel) {
                 },
                 actions = {
                     AssistChip(onClick = {}, label = { Text(vm.connectivity.name) })
+                    TextButton(onClick = { cameraOpen = true }) { Text("Camera") }
                     TextButton(onClick = vm::logout) { Text("Logout") }
                 },
             )
@@ -109,17 +145,78 @@ private fun FulfillApp(vm: AppViewModel) {
                 AppScreen.HOME -> HomeScreen(vm)
                 AppScreen.PICK -> PickScreen(vm)
                 AppScreen.INVENTORY -> InventoryScreen(vm)
-                AppScreen.UNPACK,
-                AppScreen.BOH,
-                AppScreen.DAMAGE,
-                AppScreen.CYCLE_COUNT,
-                AppScreen.RECOVERY,
-                AppScreen.RECEIVE,
-                AppScreen.REPLENISHMENT -> HomeScreen(vm)
+                AppScreen.UNPACK -> UnpackScreen(vm)
+                AppScreen.BOH -> BohMoveScreen(vm)
+                AppScreen.DAMAGE -> DamageScreen(vm)
+                AppScreen.CYCLE_COUNT -> CycleCountScreen(vm)
+                AppScreen.RECOVERY -> RecoveryScreen(vm)
+                AppScreen.RECEIVE -> ReceiveScreen(vm)
+                AppScreen.REPLENISHMENT -> ReplenishmentScreen(vm)
+            }
+        }
+    }
+
+    if (cameraOpen) {
+        CameraScannerOverlay(
+            onScan = { value ->
+                vm.submitScanValue(value)
+                cameraOpen = false
+            },
+            onDismiss = { cameraOpen = false },
+        )
+    }
+}
+
+@Composable
+private fun ForcePersonalPinScreen(vm: AppViewModel) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+            Column(
+                Modifier.padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text("Create your personal PIN", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "This is your first sign-in with a temporary PIN. Choose a private 6–10 digit PIN you can remember. Warehouse tools stay locked until this is complete.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = vm.newPinInput,
+                    onValueChange = { value -> vm.newPinInput = value.filter(Char::isDigit).take(10) },
+                    label = { Text("New PIN") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Next),
+                )
+                OutlinedTextField(
+                    value = vm.confirmPinInput,
+                    onValueChange = { value -> vm.confirmPinInput = value.filter(Char::isDigit).take(10) },
+                    label = { Text("Confirm PIN") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                )
+                Text("6–10 digits only. Do not share it with coworkers.", style = MaterialTheme.typography.bodySmall)
+                vm.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                Button(
+                    onClick = vm::completeFirstLoginPin,
+                    enabled = !vm.busy &&
+                        vm.newPinInput.length in 6..10 &&
+                        vm.confirmPinInput.length in 6..10,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (vm.busy) CircularProgressIndicator(Modifier.height(20.dp)) else Text("Save PIN & continue")
+                }
+                TextButton(onClick = vm::logout, modifier = Modifier.align(Alignment.End)) {
+                    Text("Sign out")
+                }
             }
         }
     }
 }
+
 
 @Composable
 private fun LoginScreen(vm: AppViewModel) {
@@ -145,12 +242,12 @@ private fun LoginScreen(vm: AppViewModel) {
                 )
                 OutlinedTextField(
                     value = vm.passwordInput,
-                    onValueChange = { vm.passwordInput = it },
-                    label = { Text("Password") },
+                    onValueChange = { value -> vm.passwordInput = value.filter(Char::isDigit).take(10) },
+                    label = { Text("6–10 digit PIN") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
                 )
                 TextButton(
                     onClick = vm::forgotPassword,
@@ -162,7 +259,7 @@ private fun LoginScreen(vm: AppViewModel) {
                 vm.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Button(
                     onClick = vm::login,
-                    enabled = !vm.busy && vm.usernameInput.isNotBlank() && vm.passwordInput.isNotBlank(),
+                    enabled = !vm.busy && vm.usernameInput.isNotBlank() && vm.passwordInput.length in 6..10,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (vm.busy) CircularProgressIndicator(Modifier.height(20.dp)) else Text("Sign in")
@@ -206,13 +303,14 @@ private fun HomeScreen(vm: AppViewModel) {
     ) {
         Text("Operations", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text("Device ${vm.session?.deviceId ?: ""}", style = MaterialTheme.typography.bodySmall)
+        Text("Presence heartbeat: 5s • Waiting-order refresh: 3s", style = MaterialTheme.typography.bodySmall)
 
         ElevatedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Outbound Pick", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("30-second offers, resumable tasks, bin validation, item barcode validation, durable scans.")
+                Text("Live queue auto-checks every 3 seconds. Offers appear automatically; only the first successful accept owns the order.")
                 Button(onClick = vm::openPick, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (vm.currentTask == null) "Find next order" else "Resume active order")
+                    Text(if (vm.currentTask == null) "Check now" else "Resume active order")
                 }
             }
         }
@@ -227,28 +325,34 @@ private fun HomeScreen(vm: AppViewModel) {
             }
         }
 
-        Text("Backend modules", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text("Warehouse tools", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            PlannedModule("Unpack", Modifier.weight(1f))
-            PlannedModule("BOH Move", Modifier.weight(1f))
+            OperationModule("Unpack", "Returns / inbound tote", vm::openUnpack, Modifier.weight(1f))
+            OperationModule("BOH Move", "Bin → bin", vm::openBoh, Modifier.weight(1f))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            PlannedModule("DMG", Modifier.weight(1f))
-            PlannedModule("Cycle Count", Modifier.weight(1f))
+            OperationModule("Damage", "Move to DMG", vm::openDamage, Modifier.weight(1f))
+            OperationModule("Cycle Count", "Physical reconcile", vm::openCycleCount, Modifier.weight(1f))
         }
-        Text(
-            "The backend already supports these flows; dedicated PDA screens are the next UI slice.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OperationModule("Receive", "Shipment + stow", vm::openReceive, Modifier.weight(1f))
+            OperationModule("Replenish", "Reserve → pick face", vm::openReplenishment, Modifier.weight(1f))
+        }
+        OperationModule("Recovery", "Cancelled/exception stock", vm::openRecovery, Modifier.fillMaxWidth())
     }
 }
 
 @Composable
-private fun PlannedModule(name: String, modifier: Modifier = Modifier) {
-    Card(modifier) {
-        Column(Modifier.padding(14.dp)) {
+private fun OperationModule(
+    name: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ElevatedCard(onClick = onClick, modifier = modifier) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(name, fontWeight = FontWeight.SemiBold)
-            Text("API ready", style = MaterialTheme.typography.labelSmall)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall)
         }
     }
 }

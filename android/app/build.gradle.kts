@@ -14,8 +14,8 @@ android {
         applicationId = "com.obieda.fulfillos"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.4.0"
+        versionCode = 6
+        versionName = "0.5.0"
     }
 
     buildTypes {
@@ -51,6 +51,12 @@ dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.12.0")
+    implementation("androidx.core:core-ktx:1.17.0")
+    implementation("androidx.camera:camera-core:1.5.0")
+    implementation("androidx.camera:camera-camera2:1.5.0")
+    implementation("androidx.camera:camera-lifecycle:1.5.0")
+    implementation("androidx.camera:camera-view:1.5.0")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.ui:ui")

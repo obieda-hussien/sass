@@ -21,6 +21,7 @@ from ..models_ops import (
     ShiftTemplate,
     UserPermissionGrant,
 )
+from .eventing import enqueue_outbox
 from .ops_platform import OpsError, clock_in_shift, clock_out_shift, get_worker_state, set_worker_state
 
 
@@ -128,6 +129,20 @@ def audit_event(
     )
     db.add(event)
     db.flush()
+    enqueue_outbox(
+        db,
+        topic="audit.admin",
+        aggregate_type=event.entity_type,
+        aggregate_id=event.entity_id,
+        payload={
+            "audit_event_id": event.id,
+            "actor_user_id": actor_user_id,
+            "action": event.action,
+            "field_name": field_name,
+            "reason": reason,
+            "created_at": event.created_at,
+        },
+    )
     return event
 
 

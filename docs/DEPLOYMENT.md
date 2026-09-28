@@ -1,4 +1,4 @@
-# FulfillOS deployment — v0.4
+# FulfillOS deployment — v0.5
 
 ## Production topology
 
@@ -70,6 +70,23 @@ BOOTSTRAP_SUPERVISOR_PASSWORD=<secret>
 
 Bootstrap accounts are for initial/recovery access. Normal employee/user management should be performed through the application.
 
+## v0.5 runtime/eventing configuration
+
+Optional server-side environment variables:
+
+```text
+FULFILLOS_OUTBOX_INTERVAL_SECONDS=2
+FULFILLOS_INCIDENT_WEBHOOK_URL=
+OTEL_SERVICE_NAME=fulfillos-api
+OTEL_EXPORTER_OTLP_ENDPOINT=
+FULFILLOS_SERVER_API_BASE_URL=https://<api-host>/api
+```
+
+- The outbox interval controls background publication cadence.
+- The incident webhook receives `incident.*` outbox topics when configured.
+- OTLP export is optional; structured request logging and in-process instrumentation still work without an exporter.
+- `FULFILLOS_SERVER_API_BASE_URL` is used by the Next.js BFF when web and API origins differ. Do not expose bearer credentials through public environment variables.
+
 ## Health verification
 
 The deployment workflow validates that:
@@ -77,7 +94,7 @@ The deployment workflow validates that:
 ```json
 {
   "ok": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "database": "connected",
   "telemetry": "connected"
 }
@@ -91,7 +108,7 @@ This prevents a deploy from being considered successful merely because the platf
 
 ### Alembic
 
-v0.4 uses Alembic for forward schema evolution.
+Alembic is the forward schema mechanism. v0.5 adds identity-lifecycle and transactional-outbox revisions on top of the v0.4 governance schema.
 
 Files:
 
@@ -136,6 +153,17 @@ FULFILLOS_DISABLE_AUTO_MIGRATE=1
 
 Use this only when the deployment process runs migrations separately.
 
+### v0.5 migrations
+
+The v0.5 migration chain includes:
+
+- PDA presence / telemetry support;
+- user `must_change_password` + `deleted_at`;
+- transactional `outbox_events`;
+- case-insensitive unique username index on `lower(username)`.
+
+Deployments must allow the startup migrator to reach the current Alembic head before serving normal workload.
+
 ## Historical SQL migrations
 
 These remain in the repository as historical/bootstrap references:
@@ -145,15 +173,27 @@ backend/migrations/0001_initial.sql
 backend/migrations/0002_ops_platform.sql
 ```
 
-They are not the preferred forward migration path after v0.4.
+They are not the preferred forward migration path after the Alembic baseline.
+
+## Browser manager session security
+
+v0.5 manager authentication uses the Next.js BFF:
+
+- access/refresh credentials are `HttpOnly`;
+- cookies use `SameSite=Strict` and `Secure` in production;
+- unsafe mutations require CSRF validation;
+- browser JavaScript never reads the FastAPI bearer credential;
+- server-side refresh rotates the web session when needed.
+
+Production should terminate TLS at the hosting layer and preserve same-site cookie behavior for the web/BFF origin.
 
 ## Android production build
 
 Current Android release metadata:
 
 ```text
-versionName = 0.4.0
-versionCode = 5
+versionName = 0.5.0
+versionCode = 6
 minSdk = 26
 targetSdk = 36
 compileSdk = 37
@@ -179,9 +219,9 @@ Artifact labels are derived from Gradle `versionName` instead of being hard-code
 Example:
 
 ```text
-FulfillOS-v0.4.0-production-apks
-  ├─ FulfillOS-v0.4.0-prod-debug.apk
-  ├─ FulfillOS-v0.4.0-prod-release.apk
+FulfillOS-v0.5.0-production-apks
+  ├─ FulfillOS-v0.5.0-prod-debug.apk
+  ├─ FulfillOS-v0.5.0-prod-release.apk
   ├─ production-url.txt
   └─ SHA256SUMS.txt
 ```
