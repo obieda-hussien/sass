@@ -1,15 +1,15 @@
-# FulfillOS build report — v0.4
+# FulfillOS build report — v0.5
 
 _Status snapshot: 28 September 2026._
 
 ## Release summary
 
-FulfillOS v0.4 builds on the v0.3 operations platform and adds the first production-oriented governance layer around schema evolution, workforce hierarchy, rota, permissions, audit and executable replenishment.
+FulfillOS v0.5 builds on the v0.4 governance/operations platform and closes the biggest usability and production-readiness gaps: first-login PIN security, PDA presence and live order polling, full operational Compose workflows, scanner/camera support, secure browser sessions, broader audit coverage, a transactional outbox and OpenTelemetry instrumentation.
 
 Current Android release metadata:
 
-- versionName: `0.4.0`
-- versionCode: `5`
+- versionName: `0.5.0`
+- versionCode: `6`
 - minSdk: `26`
 - targetSdk: `36`
 - compileSdk: `37`
@@ -263,6 +263,9 @@ Operational overview and pipeline visibility.
 Implemented/reliability foundation:
 
 - device-bound session recovery;
+- forced personal PIN setup on first login;
+- 5-second PDA presence heartbeat;
+- 3-second Waiting Order / active-task polling while online;
 - durable pending-event journal;
 - reconnect/retry behavior;
 - pick flow;
@@ -273,18 +276,23 @@ Implemented/reliability foundation:
 - completion summary;
 - worker state API integration;
 - inventory tools;
-- WorkManager-based background retry.
+- WorkManager-based background retry;
+- full Compose screens for Receive/Stow, Unpack, BOH Move, Damage, Cycle Count, Recovery and Replenishment;
+- generic + Zebra/DataWedge + Honeywell + Datalogic broadcast scanner normalization;
+- CameraX + on-device ML Kit barcode fallback;
+- one shared ScanBus for hardware, camera and manual test scans.
 
-Current gap:
-
-Receive, Unpack, BOH Move, Damage, Cycle Count, Recovery and Replenishment still need fully polished production-grade handheld Compose screens and scanner flows.
+Remaining Android production work is now mostly fleet/site validation, foreground-task UX polish, localization/RTL, real scanner-profile configuration and production signing—not missing core warehouse screens.
 
 ## Database migrations
 
-v0.4 introduces Alembic:
+Alembic schema evolution now includes the v0.4 governance baseline plus v0.5 PDA-presence, identity-lifecycle and transactional-outbox revisions:
 
 - pre-Alembic production baseline revision;
 - v0.4 governance/workforce revision;
+- v0.5 PDA presence/telemetry revision;
+- v0.5 forced-PIN and soft-delete identity revision;
+- v0.5 transactional outbox revision;
 - startup migration runner;
 - fresh-database bootstrap;
 - existing-database stamp + upgrade;
@@ -307,23 +315,39 @@ Implemented:
 - production-connected Android APK generation;
 - Android artifact names derived from Gradle version metadata.
 
-Latest merged `main` checks for v0.4 are green.
+The v0.5 branch is required to pass backend, Next.js and Android debug/release CI before merge.
+
+## v0.5 security, eventing and observability
+
+Implemented:
+
+- employee PINs are 6–10 numeric digits;
+- generated onboarding/reset PINs are exactly six random digits;
+- first PDA login is blocked from warehouse APIs until the employee chooses a personal PIN;
+- manager emergency PIN resets revoke active sessions;
+- usernames are checked case-insensitively for duplicates and can be changed without changing employee identity;
+- user “delete” is a safe soft-delete that preserves operational/payroll history;
+- browser bearer credentials moved out of localStorage into HttpOnly/SameSite cookies behind a Next.js BFF;
+- unsafe web mutations require CSRF token validation;
+- sensitive employee, promotion, attendance, performance, payroll-policy, PIN, username and deactivation actions are audited;
+- PostgreSQL transactional outbox with retry/backoff and SKIP LOCKED dispatch;
+- outbox topics for audit, worker state, order claims, replenishment and incidents;
+- optional incident webhook;
+- OpenTelemetry FastAPI/SQLAlchemy traces and HTTP request/error/latency metrics;
+- structured request logs with X-Request-ID.
 
 ## Remaining high-priority work
 
-1. complete full Android operational screens;
-2. industrial scanner integration + camera fallback;
-3. production signing / Play App Signing;
-4. short-lived browser sessions using HttpOnly/SameSite cookies + CSRF protection;
-5. expand audit coverage for every sensitive profile/payroll edit;
-6. verified email/SMS password recovery;
-7. transactional outbox + event distribution;
-8. observability and incident notification;
-9. measured warehouse topology calibration;
-10. richer replenishment SLA/priority and handheld UX;
-11. protected release/changelog/rollback process;
-12. data privacy/retention/export controls;
-13. statutory payroll/tax logic only if required.
+1. production signing / Play App Signing;
+2. verified email/SMS self-service password/PIN recovery;
+3. measured warehouse topology and congestion calibration;
+4. physical acceptance testing and scanner-profile rollout on the real PDA fleet;
+5. SSE/WebSocket event consumers on top of the outbox to reduce web polling;
+6. backup/restore and disaster-recovery drills;
+7. protected release/changelog/rollback process;
+8. privacy/retention/export controls;
+9. stronger multi-site/tenant isolation;
+10. statutory payroll/tax logic only if required.
 
 ## Validation principle
 
