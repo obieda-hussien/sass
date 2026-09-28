@@ -168,6 +168,23 @@ def dashboard_file():
     return FileResponse(path)
 
 
+def session_payload(
+    user: User,
+    device: Device,
+    access_token: str,
+    refresh_token: str,
+) -> dict[str, object]:
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user_id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "device_id": device.id,
+        "must_change_password": bool(user.must_change_password),
+    }
+
+
 @app.post("/auth/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     with db.begin():
@@ -183,14 +200,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
             raise HTTPException(403, "Device is not trusted")
         device.app_version = req.app_version or device.app_version
         access, refresh, _ = issue_session(db, user, device)
-        return {
-            "access_token": access,
-            "refresh_token": refresh,
-            "user_id": user.id,
-            "username": user.username,
-            "role": user.role,
-            "device_id": device.id,
-        }
+        return session_payload(user, device, access, refresh)
 
 
 @app.post("/auth/refresh")
@@ -201,14 +211,8 @@ def refresh(req: RefreshRequest, db: Session = Depends(get_db)):
             raise HTTPException(401, "Refresh rejected")
         access, refresh_token, record = result
         user = db.get(User, record.user_id)
-        return {
-            "access_token": access,
-            "refresh_token": refresh_token,
-            "user_id": user.id,
-            "username": user.username,
-            "role": user.role,
-            "device_id": record.device_id,
-        }
+        device = db.get(Device, record.device_id)
+        return session_payload(user, device, access, refresh_token)
 
 
 @app.post("/auth/forgot-password", status_code=202)
@@ -216,23 +220,72 @@ def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
     # Deliberately generic: never reveal whether a username/email exists.
     with db.begin():
         request_password_reset(db, req.identifier)
-    return {"accepted": True, "message": "If the account exists, a supervisor can issue a temporary password."}
+    return {"accepted": True, "message": "If the account exists, a supervisor can issue a temporary PIN."}
 
 
 @app.post("/auth/change-password")
-def change_password(req: ChangePasswordRequest, who=Depends(actor), db: Session = Depends(get_db)):
-    user, _ = who
+def change_password(
+    req: ChangePasswordRequest,
+    who=Depends(authenticated_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
     with db.begin():
         user = db.get(User, user.id)
         if not user or not verify_password(req.current_password, user.password_hash):
-            raise HTTPException(400, "Current password is incorrect")
-        if req.current_password == req.new_password:
-            raise HTTPException(400, "New password must be different")
-        user.password_hash = hash_password(req.new_password)
-        sessions = db.scalars(select(SessionToken).where(SessionToken.user_id == user.id)).all()
-        for session in sessions:
-            session.revoked = True
-    return {"changed": True, "reauthentication_required": True}
+            raise HTTPException(400, "Current PIN is incorrect")
+        new_pin = validate_numeric_pin(req.new_password)
+        if verify_password(new_pin, user.password_hash):
+            raise HTTPException(400, "New PIN must be different")
+        user.password_hash = hash_password(new_pin)
+        user.must_change_password = False
+        revoke_user_sessions(db, user.id)
+        access, refresh_token, _ = issue_session(db, user, device)
+        audit_event(
+            db,
+            actor_user_id=user.id,
+            action="CHANGE_OWN_PIN",
+            entity_type="USER",
+            entity_id=user.id,
+            new_value={"must_change_password": False},
+        )
+        return {
+            "changed": True,
+            "reauthentication_required": False,
+            "session": session_payload(user, device, access, refresh_token),
+        }
+
+
+@app.post("/auth/complete-first-login")
+def complete_first_login(
+    req: CompleteFirstLoginRequest,
+    who=Depends(authenticated_actor),
+    db: Session = Depends(get_db),
+):
+    user, device = who
+    if not user.must_change_password:
+        raise HTTPException(409, {"code": "PIN_ALREADY_PERSONAL", "message": "PIN change is not required."})
+    with db.begin():
+        user = db.get(User, user.id)
+        new_pin = validate_numeric_pin(req.new_password)
+        if verify_password(new_pin, user.password_hash):
+            raise HTTPException(400, "Choose a PIN different from the temporary PIN")
+        user.password_hash = hash_password(new_pin)
+        user.must_change_password = False
+        revoke_user_sessions(db, user.id)
+        access, refresh_token, _ = issue_session(db, user, device)
+        audit_event(
+            db,
+            actor_user_id=user.id,
+            action="COMPLETE_FIRST_LOGIN",
+            entity_type="USER",
+            entity_id=user.id,
+            new_value={"must_change_password": False},
+        )
+        return {
+            "changed": True,
+            "session": session_payload(user, device, access, refresh_token),
+        }
 
 
 @app.post("/devices/heartbeat")
