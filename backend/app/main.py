@@ -234,6 +234,7 @@ def heartbeat(req: HeartbeatRequest, who=Depends(actor), db: Session = Depends(g
             battery_percent=req.battery_percent,
             connectivity=device.status,
             last_location_id=req.last_location_id,
+            activity=req.activity,
         )
         active = active_task_for_actor(db, user.id, device.id)
         current_task_id = active.id if active else None
