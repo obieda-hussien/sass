@@ -427,12 +427,22 @@ private fun ActivityRecorderScreen(vm: AppViewModel) {
                 Text("Current activity", style = MaterialTheme.typography.labelLarge)
                 Text(vm.workerState.replace("_", " "), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 if (vm.workerState != "AVAILABLE") {
+                    val manualFinishStates = setOf(
+                        "BREAK", "TRAINING", "BIN_CHECK", "EXPIRY_AUDIT",
+                        "VENDOR_REMOVAL", "BOH_MOVE", "ENDING_SHIFT",
+                    )
                     Button(
                         onClick = vm::finishRecordedActivity,
-                        enabled = !vm.busy && vm.currentTask == null,
+                        enabled = !vm.busy && vm.currentTask == null && vm.workerState in manualFinishStates,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(if (vm.workerState == "BREAK") "End break & go available" else "Finish task & go available")
+                        Text(
+                            when {
+                                vm.workerState == "BREAK" -> "End break & go available"
+                                vm.workerState in manualFinishStates -> "Finish task & go available"
+                                else -> "Finish from operational workflow"
+                            }
+                        )
                     }
                 }
             }
@@ -467,29 +477,33 @@ private fun ActivityRecorderScreen(vm: AppViewModel) {
 
             Text("Recorded non-order work", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilledTonalButton(onClick = { vm.recordActivity("TRAINING", "TRAINING") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Training") }
-                FilledTonalButton(onClick = { vm.recordActivity("BIN_CHECK", "BIN_CHECK") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Bin check") }
+                FilledTonalButton(onClick = { vm.recordActivity("TRAINING", "TRAINING") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Training") }
+                FilledTonalButton(onClick = { vm.recordActivity("BIN_CHECK", "BIN_CHECK") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Bin check") }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilledTonalButton(onClick = { vm.recordActivity("EXPIRY_AUDIT", "EXPIRY_AUDIT") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Expiry audit") }
-                FilledTonalButton(onClick = { vm.recordActivity("VENDOR_REMOVAL", "VENDOR_REMOVAL") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Vendor removal") }
+                FilledTonalButton(onClick = { vm.recordActivity("EXPIRY_AUDIT", "EXPIRY_AUDIT") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Expiry audit") }
+                FilledTonalButton(onClick = { vm.recordActivity("VENDOR_REMOVAL", "VENDOR_REMOVAL") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Vendor removal") }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilledTonalButton(onClick = { vm.recordActivity("BOH_MOVE", "MANUAL_BOH_TASK") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("BOH task") }
-                FilledTonalButton(onClick = { vm.recordActivity("ENDING_SHIFT", "ENDING_SHIFT") }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Ending shift") }
+                FilledTonalButton(onClick = { vm.recordActivity("BOH_MOVE", "MANUAL_BOH_TASK") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("BOH task") }
+                FilledTonalButton(onClick = { vm.recordActivity("ENDING_SHIFT", "ENDING_SHIFT") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Ending shift") }
             }
 
             Text("Operational workflows", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text("These open the real workflow; once work starts the backend records the matching worker state.", style = MaterialTheme.typography.bodySmall)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OperationModule("Receive", "Shipment + stow", vm::openReceive, Modifier.weight(1f))
-                OperationModule("Unpack", "Inbound / returns", vm::openUnpack, Modifier.weight(1f))
+            if (vm.workerState == "AVAILABLE") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OperationModule("Receive", "Shipment + stow", vm::openReceive, Modifier.weight(1f))
+                    OperationModule("Unpack", "Inbound / returns", vm::openUnpack, Modifier.weight(1f))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OperationModule("Cycle Count", "Physical count", vm::openCycleCount, Modifier.weight(1f))
+                    OperationModule("Replenish", "Reserve → pick face", vm::openReplenishment, Modifier.weight(1f))
+                }
+                OperationModule("BOH Move", "Open scanner workflow", vm::openBoh, Modifier.fillMaxWidth())
+            } else {
+                Text("Finish the current recorded activity before starting a different workflow.", style = MaterialTheme.typography.bodySmall)
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OperationModule("Cycle Count", "Physical count", vm::openCycleCount, Modifier.weight(1f))
-                OperationModule("Replenish", "Reserve → pick face", vm::openReplenishment, Modifier.weight(1f))
-            }
-            OperationModule("BOH Move", "Open scanner workflow", vm::openBoh, Modifier.fillMaxWidth())
         }
     }
 }
