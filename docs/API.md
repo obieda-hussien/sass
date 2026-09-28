@@ -1,4 +1,4 @@
-# FulfillOS API surface — v0.4
+# FulfillOS API surface — v0.5
 
 This document groups the current public/internal API by responsibility. The FastAPI OpenAPI document remains the authoritative machine-readable contract.
 
@@ -15,10 +15,25 @@ POST /auth/login
 POST /auth/refresh
 POST /auth/forgot-password
 POST /auth/change-password
+POST /auth/complete-first-login
 POST /devices/heartbeat
 ```
 
 Authentication is device-aware. Android uses access + refresh credentials and restores server-owned task state after process/device recovery.
+
+## v0.5 identity/session behavior
+
+Employee onboarding and manager resets use numeric PINs:
+
+- accepted employee PIN length: 6–10 digits;
+- generated temporary PIN: exactly six random digits;
+- new employee accounts start with `must_change_password=true`;
+- normal warehouse API dependencies return HTTP 428 / `PASSWORD_CHANGE_REQUIRED` until `POST /auth/complete-first-login` succeeds;
+- completing first login rotates the session and revokes the temporary-login session;
+- username changes and emergency PIN resets revoke existing sessions;
+- deleting an employee is a soft delete that preserves historical warehouse/payroll data.
+
+The browser manager UI does not expose FastAPI bearer credentials to JavaScript. It authenticates through the Next.js `/web-auth/*` BFF routes and sends state-changing calls through the CSRF-protected `/web-api/*` proxy.
 
 ## Catalog, locations and inventory
 
@@ -45,7 +60,7 @@ POST /tasks/{task_id}/scan
 POST /tasks/{task_id}/sync
 ```
 
-v0.4 dispatch/operations routes:
+Dispatch/operations routes:
 
 ```text
 GET  /ops/dispatch/workers
@@ -96,7 +111,7 @@ POST /ops/shifts/clock-in
 POST /ops/shifts/clock-out
 ```
 
-v0.4 planning endpoints:
+Planning endpoints:
 
 ```text
 POST /ops/shifts/templates
@@ -130,7 +145,11 @@ GET   /admin/employees
 POST  /admin/employees
 GET   /admin/employees/{user_id}
 PATCH /admin/employees/{user_id}
+DELETE /admin/employees/{user_id}
 
+GET   /admin/usernames/{username}/availability
+PATCH /admin/employees/{user_id}/account
+POST  /admin/employees/{user_id}/set-pin
 POST  /admin/employees/{user_id}/promote
 POST  /admin/employees/{user_id}/attendance
 POST  /admin/employees/{user_id}/performance-events
@@ -283,6 +302,16 @@ POST /tasks/{task_id}/downtime/{segment_id}/stop
 ```
 
 Downtime segments are used to separate technical delay from accountable associate time.
+
+## System diagnostics / eventing
+
+```text
+GET /admin/system/health
+```
+
+The authenticated diagnostic payload includes transactional-outbox counts, telemetry state, OTLP-export configuration and incident-webhook configuration.
+
+Authoritative business changes can enqueue integration events in PostgreSQL in the same transaction. The background dispatcher retries delivery independently; failure of telemetry/webhook delivery does not roll back committed warehouse state.
 
 ## API evolution principles
 
