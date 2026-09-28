@@ -9,6 +9,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -17,6 +19,8 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -37,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -157,8 +162,12 @@ private fun FulfillApp(vm: AppViewModel) {
                 },
                 actions = {
                     AssistChip(onClick = {}, label = { Text(vm.connectivity.name) })
-                    TextButton(onClick = { vm.requestCameraScan("Manual camera scan") }) { Text("Camera") }
-                    TextButton(onClick = vm::logout) { Text("Logout") }
+                    IconButton(onClick = { vm.requestCameraScan("Manual camera scan") }) {
+                        Icon(Icons.Filled.CameraAlt, contentDescription = "Open camera scanner")
+                    }
+                    IconButton(onClick = vm::logout) {
+                        Icon(Icons.Filled.Logout, contentDescription = "Sign out")
+                    }
                 },
             )
         },
@@ -328,67 +337,63 @@ private fun ConnectionBanner(
 @Composable
 private fun HomeScreen(vm: AppViewModel) {
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Operations", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text("Device ${vm.session?.deviceId ?: ""}", style = MaterialTheme.typography.bodySmall)
-        Text("Presence heartbeat: 5s • Waiting-order refresh: 3s", style = MaterialTheme.typography.bodySmall)
-
-        ElevatedCard(
-            onClick = vm::openActivityRecorder,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Record task / break", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("Tell dispatch what you are actually doing so orders are not sent to you at the wrong time.")
-                    }
-                    AssistChip(onClick = {}, label = { Text(vm.workerState.replace("_", " ")) })
-                }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Operations", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 Text(
-                    if (vm.workerState == "AVAILABLE") "Available • waiting for orders"
-                    else "Recorded: ${vm.workerState.replace("_", " ")} • dispatch blocked",
+                    if (vm.workerState == "AVAILABLE") "Ready • live every 3s"
+                    else vm.workerState.replace("_", " "),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            AssistChip(onClick = vm::openActivityRecorder, label = { Text(vm.workerState.replace("_", " ")) })
         }
 
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Outbound Pick", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("Live queue auto-checks every 3 seconds. Offers appear automatically; only the first successful accept owns the order.")
-                Button(onClick = vm::openPick, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (vm.currentTask == null) "Check now" else "Resume active order")
-                }
-            }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OperationModule(
+                name = "Task",
+                subtitle = "Break / activity",
+                icon = Icons.Filled.Assignment,
+                onClick = vm::openActivityRecorder,
+                modifier = Modifier.weight(1f),
+            )
+            OperationModule(
+                name = if (vm.currentTask == null) "Pick" else "Order",
+                subtitle = if (vm.currentTask == null) "Waiting" else "Resume",
+                icon = Icons.Filled.ShoppingCart,
+                onClick = vm::openPick,
+                modifier = Modifier.weight(1f),
+            )
+            OperationModule(
+                name = "Stock",
+                subtitle = "Search / scan",
+                icon = Icons.Filled.Inventory2,
+                onClick = vm::openInventory,
+                modifier = Modifier.weight(1f),
+            )
         }
 
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Inventory Viewer", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("Search an ASIN or scan a physical/logical location.")
-                FilledTonalButton(onClick = vm::openInventory, modifier = Modifier.fillMaxWidth()) {
-                    Text("Open inventory")
-                }
-            }
-        }
-
-        Text("Warehouse tools", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text("Warehouse", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OperationModule("Unpack", "Returns / inbound tote", vm::openUnpack, Modifier.weight(1f))
-            OperationModule("BOH Move", "Bin → bin", vm::openBoh, Modifier.weight(1f))
+            OperationModule("Receive", "Inbound", Icons.Filled.LocalShipping, vm::openReceive, Modifier.weight(1f))
+            OperationModule("Unpack", "Returns", Icons.Filled.Inventory, vm::openUnpack, Modifier.weight(1f))
+            OperationModule("BOH", "Move", Icons.Filled.SwapHoriz, vm::openBoh, Modifier.weight(1f))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OperationModule("Damage", "Move to DMG", vm::openDamage, Modifier.weight(1f))
-            OperationModule("Cycle Count", "Physical reconcile", vm::openCycleCount, Modifier.weight(1f))
+            OperationModule("Damage", "DMG", Icons.Filled.Delete, vm::openDamage, Modifier.weight(1f))
+            OperationModule("Count", "Cycle", Icons.Filled.FactCheck, vm::openCycleCount, Modifier.weight(1f))
+            OperationModule("Replenish", "Restock", Icons.Filled.PlaylistAddCheck, vm::openReplenishment, Modifier.weight(1f))
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OperationModule("Receive", "Shipment + stow", vm::openReceive, Modifier.weight(1f))
-            OperationModule("Replenish", "Reserve → pick face", vm::openReplenishment, Modifier.weight(1f))
-        }
-        OperationModule("Recovery", "Cancelled/exception stock", vm::openRecovery, Modifier.fillMaxWidth())
+        OperationModule(
+            "Recovery",
+            "Exceptions / cancelled stock",
+            Icons.Filled.Warning,
+            vm::openRecovery,
+            Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -396,113 +401,144 @@ private fun HomeScreen(vm: AppViewModel) {
 private fun OperationModule(
     name: String,
     subtitle: String,
+    icon: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    ElevatedCard(onClick = onClick, modifier = modifier) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(name, fontWeight = FontWeight.SemiBold)
+    ElevatedCard(onClick = onClick, modifier = modifier.heightIn(min = 104.dp)) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(icon, contentDescription = name, modifier = Modifier.size(30.dp))
+            Text(name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
             Text(subtitle, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
 
 @Composable
+private fun IconTaskButton(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    FilledTonalButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.heightIn(min = 58.dp),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Icon(icon, contentDescription = label)
+        Spacer(Modifier.width(6.dp))
+        Text(label)
+    }
+}
+
+
+@Composable
 private fun ActivityRecorderScreen(vm: AppViewModel) {
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = vm::goHome) { Text("Home") }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = vm::goHome) {
+                Icon(Icons.Filled.Home, contentDescription = "Home")
+            }
+            Text("Record task", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = vm::refreshWorkerState, enabled = !vm.busy) { Text("Refresh state") }
+            IconButton(onClick = vm::refreshWorkerState, enabled = !vm.busy) {
+                Icon(Icons.Filled.Refresh, contentDescription = "Refresh worker state")
+            }
         }
 
-        Text("Record task", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text("This state is sent to dispatch. Any non-AVAILABLE state blocks new pick orders.")
-
-        ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Current activity", style = MaterialTheme.typography.labelLarge)
-                Text(vm.workerState.replace("_", " "), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(
+                    if (vm.workerState == "AVAILABLE") Icons.Filled.CheckCircle else Icons.Filled.Assignment,
+                    contentDescription = null,
+                    modifier = Modifier.size(34.dp),
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("Current", style = MaterialTheme.typography.labelMedium)
+                    Text(vm.workerState.replace("_", " "), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                }
                 if (vm.workerState != "AVAILABLE") {
                     val manualFinishStates = setOf(
                         "BREAK", "TRAINING", "BIN_CHECK", "EXPIRY_AUDIT",
                         "VENDOR_REMOVAL", "BOH_MOVE", "ENDING_SHIFT",
                     )
-                    Button(
+                    IconButton(
                         onClick = vm::finishRecordedActivity,
                         enabled = !vm.busy && vm.currentTask == null && vm.workerState in manualFinishStates,
-                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(
-                            when {
-                                vm.workerState == "BREAK" -> "End break & go available"
-                                vm.workerState in manualFinishStates -> "Finish task & go available"
-                                else -> "Finish from operational workflow"
-                            }
-                        )
+                        Icon(Icons.Filled.Done, contentDescription = "Finish current task and become available")
                     }
                 }
             }
         }
 
         if (vm.currentTask != null) {
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Active order owns this picker", fontWeight = FontWeight.Bold)
-                    Text("Break and other recorded tasks are disabled until the order is completed or handed over.")
-                    Button(onClick = vm::openPick, modifier = Modifier.fillMaxWidth()) { Text("Return to order") }
+            ElevatedCard(onClick = vm::openPick, modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.ShoppingCart, contentDescription = null, modifier = Modifier.size(30.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Active order", fontWeight = FontWeight.Bold)
+                        Text("Other tasks are locked", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Icon(Icons.Filled.PlayArrow, contentDescription = "Return to order")
                 }
             }
         } else {
             OutlinedTextField(
                 value = vm.activityReasonInput,
                 onValueChange = { vm.activityReasonInput = it.take(120) },
-                label = { Text("Optional note / reason") },
+                label = { Text("Note (optional)") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
 
             Text("Break", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = { vm.startBreak("REST") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) {
-                    Text("Start break")
-                }
-                OutlinedButton(onClick = { vm.startBreak("MEAL") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) {
-                    Text("Meal break")
-                }
+                IconTaskButton("Break", Icons.Filled.Pause, { vm.startBreak("REST") }, !vm.busy && vm.workerState == "AVAILABLE", Modifier.weight(1f))
+                IconTaskButton("Meal", Icons.Filled.Restaurant, { vm.startBreak("MEAL") }, !vm.busy && vm.workerState == "AVAILABLE", Modifier.weight(1f))
             }
 
-            Text("Recorded non-order work", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilledTonalButton(onClick = { vm.recordActivity("TRAINING", "TRAINING") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Training") }
-                FilledTonalButton(onClick = { vm.recordActivity("BIN_CHECK", "BIN_CHECK") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Bin check") }
+            Text("Other work", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                IconTaskButton("Training", Icons.Filled.School, { vm.recordActivity("TRAINING", "TRAINING") }, !vm.busy && vm.workerState == "AVAILABLE", Modifier.weight(1f))
+                IconTaskButton("Bin", Icons.Filled.Inventory2, { vm.recordActivity("BIN_CHECK", "BIN_CHECK") }, !vm.busy && vm.workerState == "AVAILABLE", Modifier.weight(1f))
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilledTonalButton(onClick = { vm.recordActivity("EXPIRY_AUDIT", "EXPIRY_AUDIT") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Expiry audit") }
-                FilledTonalButton(onClick = { vm.recordActivity("VENDOR_REMOVAL", "VENDOR_REMOVAL") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Vendor removal") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                IconTaskButton("Expiry", Icons.Filled.FactCheck, { vm.recordActivity("EXPIRY_AUDIT", "EXPIRY_AUDIT") }, !vm.busy && vm.workerState == "AVAILABLE", Modifier.weight(1f))
+                IconTaskButton("Vendor", Icons.Filled.LocalShipping, { vm.recordActivity("VENDOR_REMOVAL", "VENDOR_REMOVAL") }, !vm.busy && vm.workerState == "AVAILABLE", Modifier.weight(1f))
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilledTonalButton(onClick = { vm.recordActivity("BOH_MOVE", "MANUAL_BOH_TASK") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("BOH task") }
-                FilledTonalButton(onClick = { vm.recordActivity("ENDING_SHIFT", "ENDING_SHIFT") }, enabled = !vm.busy && vm.workerState == "AVAILABLE", modifier = Modifier.weight(1f)) { Text("Ending shift") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                IconTaskButton("BOH", Icons.Filled.SwapHoriz, { vm.recordActivity("BOH_MOVE", "MANUAL_BOH_TASK") }, !vm.busy && vm.workerState == "AVAILABLE", Modifier.weight(1f))
+                IconTaskButton("End shift", Icons.Filled.Logout, { vm.recordActivity("ENDING_SHIFT", "ENDING_SHIFT") }, !vm.busy && vm.workerState == "AVAILABLE", Modifier.weight(1f))
             }
 
-            Text("Operational workflows", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text("These open the real workflow; once work starts the backend records the matching worker state.", style = MaterialTheme.typography.bodySmall)
             if (vm.workerState == "AVAILABLE") {
+                Text("Workflows", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OperationModule("Receive", "Shipment + stow", vm::openReceive, Modifier.weight(1f))
-                    OperationModule("Unpack", "Inbound / returns", vm::openUnpack, Modifier.weight(1f))
+                    OperationModule("Receive", "Inbound", Icons.Filled.LocalShipping, vm::openReceive, Modifier.weight(1f))
+                    OperationModule("Unpack", "Returns", Icons.Filled.Inventory, vm::openUnpack, Modifier.weight(1f))
+                    OperationModule("Count", "Cycle", Icons.Filled.FactCheck, vm::openCycleCount, Modifier.weight(1f))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OperationModule("Cycle Count", "Physical count", vm::openCycleCount, Modifier.weight(1f))
-                    OperationModule("Replenish", "Reserve → pick face", vm::openReplenishment, Modifier.weight(1f))
+                    OperationModule("Replenish", "Restock", Icons.Filled.PlaylistAddCheck, vm::openReplenishment, Modifier.weight(1f))
+                    OperationModule("BOH", "Move", Icons.Filled.SwapHoriz, vm::openBoh, Modifier.weight(1f))
+                    Spacer(Modifier.weight(1f))
                 }
-                OperationModule("BOH Move", "Open scanner workflow", vm::openBoh, Modifier.fillMaxWidth())
-            } else {
-                Text("Finish the current recorded activity before starting a different workflow.", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -517,9 +553,13 @@ private fun PickScreen(vm: AppViewModel) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = vm::goHome) { Text("Home") }
+            IconButton(onClick = vm::goHome) {
+                Icon(Icons.Filled.Home, contentDescription = "Home")
+            }
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = vm::refreshTask, enabled = task != null) { Text("Refresh") }
+            IconButton(onClick = vm::refreshTask, enabled = task != null) {
+                Icon(Icons.Filled.Refresh, contentDescription = "Refresh order")
+            }
         }
 
         if (task == null) {
@@ -550,6 +590,8 @@ private fun PickScreen(vm: AppViewModel) {
                             Text("Bag ${bag.bagNo} • ••••${bag.spooLast4}")
                         }
                         Button(onClick = vm::goHome, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Filled.Done, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
                             Text("Done")
                         }
                     }
@@ -558,7 +600,9 @@ private fun PickScreen(vm: AppViewModel) {
                 Text("Waiting for Orders", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text("No task is owned by this picker right now.")
                 Button(onClick = vm::claimNext, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-                    Text("Check for orders")
+                    Icon(Icons.Filled.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Check")
                 }
             }
             return@Column
@@ -575,7 +619,11 @@ private fun PickScreen(vm: AppViewModel) {
                     Text("Recovery required", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text("The order changed after physical inventory moved. Do not continue picking. A recovery/stow workflow must reconcile the tote.")
                     Text("Order ${task.orderId.take(12)}… • v${task.serverVersion}")
-                    Button(onClick = vm::refreshTask, modifier = Modifier.fillMaxWidth()) { Text("Refresh server state") }
+                    Button(onClick = vm::refreshTask, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Filled.Refresh, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Refresh")
+                    }
                 }
             }
             return@Column
@@ -596,9 +644,13 @@ private fun OfferPanel(task: TaskSnapshot, vm: AppViewModel) {
             OfferCountdown(task.offerExpiresAt)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = vm::rejectOffer, enabled = !vm.busy, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Filled.Close, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
                     Text("Reject")
                 }
                 Button(onClick = vm::acceptOffer, enabled = !vm.busy, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Filled.CheckCircle, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
                     Text("Accept")
                 }
             }
@@ -665,7 +717,9 @@ private fun ActivePickPanel(task: TaskSnapshot, vm: AppViewModel) {
                     enabled = vm.closedBags.isNotEmpty() && !vm.busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Finish order")
+                    Icon(Icons.Filled.Done, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Finish")
                 }
             }
         }
@@ -693,14 +747,14 @@ private fun ActivePickPanel(task: TaskSnapshot, vm: AppViewModel) {
             Text(prompt, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
             if (vm.scanPhase == PickScanPhase.ITEM) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { vm.skipCurrent() }, modifier = Modifier.weight(1f)) {
-                        Text("Skip")
+                    OutlinedButton(onClick = { vm.skipCurrent() }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(8.dp)) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = "Skip")
                     }
-                    OutlinedButton(onClick = { vm.shortCurrent() }, modifier = Modifier.weight(1f)) {
-                        Text("Short")
+                    OutlinedButton(onClick = { vm.shortCurrent() }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(8.dp)) {
+                        Icon(Icons.Filled.Close, contentDescription = "Short")
                     }
-                    OutlinedButton(onClick = { vm.damagedCurrent() }, modifier = Modifier.weight(1f)) {
-                        Text("Damaged")
+                    OutlinedButton(onClick = { vm.damagedCurrent() }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(8.dp)) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Damaged")
                     }
                 }
             }
@@ -710,7 +764,9 @@ private fun ActivePickPanel(task: TaskSnapshot, vm: AppViewModel) {
             if (vm.scanPhase == PickScanPhase.SYNCING) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 OutlinedButton(onClick = vm::retryPending, modifier = Modifier.fillMaxWidth()) {
-                    Text("Retry pending event")
+                    Icon(Icons.Filled.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Retry")
                 }
             }
         }
@@ -770,8 +826,10 @@ private fun InventoryScreen(vm: AppViewModel) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = vm::goHome) { Text("Home") }
-            Text("Inventory Viewer", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            IconButton(onClick = vm::goHome) {
+                Icon(Icons.Filled.Home, contentDescription = "Home")
+            }
+            Text("Inventory", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
         Text("Scan a bin or item barcode, or enter an ASIN. Product → locations and location → products are both supported.")
         OutlinedTextField(
@@ -787,7 +845,13 @@ private fun InventoryScreen(vm: AppViewModel) {
             enabled = !vm.inventoryLoading && vm.inventoryQuery.isNotBlank(),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (vm.inventoryLoading) "Loading…" else "Search")
+            if (vm.inventoryLoading) {
+                CircularProgressIndicator(Modifier.size(20.dp))
+            } else {
+                Icon(Icons.Filled.Search, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Search")
+            }
         }
 
         vm.inventoryResult?.let { result ->
