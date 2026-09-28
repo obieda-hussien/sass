@@ -33,6 +33,12 @@ class SessionManager(
         establish(api.parseSession(response.body))
     }
 
+    fun completeFirstLoginBlocking(newPin: String): Result<SessionInfo> = runCatching {
+        val response = api.completeFirstLogin(newPin)
+        if (!response.ok) error(api.parseConflictMessage(response.body).ifBlank { "PIN change failed (${response.code})" })
+        establish(api.parseSessionEnvelope(response.body))
+    }
+
     fun refreshBlocking(): Boolean {
         val refresh = secureStore.getRefreshToken() ?: return false
         val response = runCatching { api.refresh(refresh, deviceId) }.getOrNull() ?: return false
