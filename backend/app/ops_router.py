@@ -502,12 +502,13 @@ def dispatch_workers(
         if devices:
             t = db.get(DeviceTelemetry, devices[0].id)
             if t:
+                device_live = bool(row.get("device_live"))
                 telemetry = {
                     "device_id": devices[0].id,
                     "battery_percent": t.battery_percent,
-                    "connectivity": t.connectivity,
+                    "connectivity": "ONLINE" if device_live else "OFFLINE",
                     "last_location_id": t.last_location_id,
-                    "activity": t.activity,
+                    "activity": t.activity if device_live else None,
                     "updated_at": t.updated_at.isoformat(),
                 }
         row["full_name"] = profile.full_name if profile else user.username
