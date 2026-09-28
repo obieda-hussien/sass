@@ -1114,6 +1114,11 @@ def payroll_policy_put(
         if db.get(User, user_id) is None:
             raise HTTPException(404, "User not found")
         row = db.get(PayrollPolicy, user_id)
+        old_value = {
+            "late_deduction_cents_per_minute": row.late_deduction_cents_per_minute if row else 0,
+            "early_leave_deduction_cents_per_minute": row.early_leave_deduction_cents_per_minute if row else 0,
+            "auto_apply_attendance_deductions": row.auto_apply_attendance_deductions if row else False,
+        }
         if row is None:
             row = PayrollPolicy(user_id=user_id)
             db.add(row)
@@ -1122,6 +1127,19 @@ def payroll_policy_put(
         row.auto_apply_attendance_deductions = req.auto_apply_attendance_deductions
         row.updated_by_user_id = manager.id
         db.flush()
+        audit_event(
+            db,
+            actor_user_id=manager.id,
+            action="UPDATE_PAYROLL_POLICY",
+            entity_type="PAYROLL_POLICY",
+            entity_id=user_id,
+            old_value=old_value,
+            new_value={
+                "late_deduction_cents_per_minute": row.late_deduction_cents_per_minute,
+                "early_leave_deduction_cents_per_minute": row.early_leave_deduction_cents_per_minute,
+                "auto_apply_attendance_deductions": row.auto_apply_attendance_deductions,
+            },
+        )
         return {
             "user_id": user_id,
             "late_deduction_cents_per_minute": row.late_deduction_cents_per_minute,
