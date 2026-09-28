@@ -67,6 +67,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     var screen by mutableStateOf(AppScreen.HOME)
         private set
+    var workerState by mutableStateOf("AVAILABLE")
+        private set
+    var activityReasonInput by mutableStateOf("")
     var currentTask by mutableStateOf<TaskSnapshot?>(null)
         private set
     var scanPhase by mutableStateOf(PickScanPhase.BIN)
@@ -179,15 +182,19 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         worker.execute {
             val recovered = graph.sessions.recoverBlocking().getOrNull()
             var task: TaskSnapshot? = null
+            var recoveredWorkerState = "AVAILABLE"
             if (recovered != null && !recovered.mustChangePassword) {
                 val response = callWithRefresh { graph.api.getActiveTask() }
                 if (response.ok) task = runCatching { graph.api.parseTaskEnvelope(response.body) }.getOrNull()
+                val stateResponse = callWithRefresh { graph.api.getWorkerState() }
+                if (stateResponse.ok) recoveredWorkerState = graph.api.parseWorkerState(stateResponse.body)
             }
             ui {
                 session = recovered
                 authenticated = recovered != null
                 booting = false
                 busy = false
+                workerState = recoveredWorkerState
                 if (recovered == null) {
                     message = "Sign in to this trusted PDA"
                 } else {
@@ -272,12 +279,13 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 ReplenishmentScanPhase.DESTINATION -> if (activeReplenishment != null) requestCameraScan("Scan replenishment destination")
                 ReplenishmentScanPhase.COMPLETE -> Unit
             }
-            AppScreen.HOME -> Unit
+            AppScreen.HOME, AppScreen.ACTIVITY -> Unit
         }
     }
 
     private fun currentPresenceActivity(): String = when {
         currentTask != null -> "ORDER_" + (currentTask?.taskStatus ?: "ACTIVE")
+        workerState != "AVAILABLE" && workerState != "OFFLINE" -> workerState
         screen == AppScreen.INVENTORY -> "INVENTORY_VIEW"
         screen == AppScreen.UNPACK -> "UNPACK"
         screen == AppScreen.BOH -> "BOH_MOVE"
@@ -286,7 +294,110 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         screen == AppScreen.RECOVERY -> "RECOVERY"
         screen == AppScreen.RECEIVE -> "RECEIVE"
         screen == AppScreen.REPLENISHMENT -> "REPLENISHMENT"
+        screen == AppScreen.ACTIVITY -> "ACTIVITY_RECORDER"
         else -> "WAITING_FOR_ORDER"
+    }
+
+    fun openActivityRecorder() {
+        screen = AppScreen.ACTIVITY
+        refreshWorkerState()
+    }
+
+    fun refreshWorkerState() {
+        if (!authenticated || busy) return
+        worker.execute {
+            val response = callWithRefresh { graph.api.getWorkerState() }
+            ui {
+                if (response.ok) {
+                    workerState = graph.api.parseWorkerState(response.body)
+                    message = "Current activity • " + workerState.replace("_", " ")
+                } else if (response.code != 401) {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun startBreak(breakType: String = "REST") {
+        if (!authenticated || busy || currentTask != null) {
+            if (currentTask != null) errorMessage = "Finish or hand over the active order before break"
+            return
+        }
+        busy = true
+        errorMessage = null
+        message = "Starting break…"
+        worker.execute {
+            val response = callWithRefresh { graph.api.startBreak(breakType = breakType, paid = true) }
+            ui {
+                busy = false
+                if (response.ok) {
+                    workerState = "BREAK"
+                    message = "Break recorded • order dispatch blocked"
+                    sendHeartbeat(forceConnectivity = "ONLINE", activityOverride = "BREAK")
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                    message = "Break was not started"
+                }
+            }
+        }
+    }
+
+    fun finishRecordedActivity() {
+        if (!authenticated || busy || currentTask != null) return
+        busy = true
+        errorMessage = null
+        val endingBreak = workerState == "BREAK"
+        message = if (endingBreak) "Ending break…" else "Returning available…"
+        worker.execute {
+            val response = callWithRefresh {
+                if (endingBreak) graph.api.endBreak()
+                else graph.api.updateWorkerState("AVAILABLE", "ACTIVITY_COMPLETED")
+            }
+            ui {
+                busy = false
+                if (response.ok) {
+                    workerState = "AVAILABLE"
+                    activityReasonInput = ""
+                    message = "Available • waiting for orders"
+                    sendHeartbeat(forceConnectivity = "ONLINE", activityOverride = "WAITING_FOR_ORDER")
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun recordActivity(state: String, defaultReason: String) {
+        if (!authenticated || busy || currentTask != null) {
+            if (currentTask != null) errorMessage = "An active order blocks other recorded tasks"
+            return
+        }
+        val reason = activityReasonInput.trim().ifBlank { defaultReason }
+        busy = true
+        errorMessage = null
+        message = "Recording " + state.replace("_", " ").lowercase() + "…"
+        worker.execute {
+            val response = callWithRefresh { graph.api.updateWorkerState(state, reason) }
+            ui {
+                busy = false
+                if (response.ok) {
+                    workerState = graph.api.parseWorkerState(response.body)
+                    message = workerState.replace("_", " ") + " recorded • order dispatch blocked"
+                    sendHeartbeat(forceConnectivity = "ONLINE", activityOverride = workerState)
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun startBohFromRecorder() {
+        recordActivity("BOH_MOVE", "MANUAL_BOH_TASK")
+        main.postDelayed({
+            ui {
+                if (workerState == "BOH_MOVE") openBoh()
+            }
+        }, 300L)
     }
 
     fun forgotPassword() {
@@ -322,9 +433,12 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             val result = graph.sessions.loginBlocking(usernameInput, passwordInput)
             val loggedIn = result.getOrNull()
             var task: TaskSnapshot? = null
+            var loggedInWorkerState = "AVAILABLE"
             if (loggedIn != null && !loggedIn.mustChangePassword) {
                 val active = graph.api.getActiveTask()
                 if (active.ok) task = runCatching { graph.api.parseTaskEnvelope(active.body) }.getOrNull()
+                val stateResponse = graph.api.getWorkerState()
+                if (stateResponse.ok) loggedInWorkerState = graph.api.parseWorkerState(stateResponse.body)
             }
             ui {
                 busy = false
@@ -334,6 +448,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 } else {
                     session = loggedIn
                     authenticated = true
+                    workerState = loggedInWorkerState
                     passwordInput = ""
                     message = when {
                         loggedIn.mustChangePassword -> "Temporary PIN accepted • create your personal PIN"
@@ -694,6 +809,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     scannedValue = ""
                     scanPhase = PickScanPhase.BIN
                     screen = AppScreen.PICK
+                    workerState = "AVAILABLE"
                     message = "Order complete"
                 } else if (response.code == 401) {
                     expireSession()
