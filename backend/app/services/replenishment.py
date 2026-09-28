@@ -16,6 +16,7 @@ from ..models_ops import (
     WorkerRuntimeState,
 )
 from .compatibility import storage_compatible
+from .eventing import enqueue_outbox
 from .inventory import InventoryError, move_inventory
 from .ops_platform import OpsError, get_worker_state, set_worker_state
 
@@ -389,6 +390,23 @@ def complete(
     if state and state.activity_ref == task.id:
         set_worker_state(db, user_id, "AVAILABLE", reason="REPLENISHMENT_COMPLETED", force=True)
     db.flush()
+    enqueue_outbox(
+        db,
+        topic="replenishment.completed",
+        aggregate_type="REPLENISHMENT_TASK",
+        aggregate_id=task.id,
+        payload={
+            "task_id": task.id,
+            "product_id": task.product_id,
+            "source_location_id": task.source_location_id,
+            "destination_location_id": task.destination_location_id,
+            "planned_qty": task.qty,
+            "actual_qty": actual_qty,
+            "status": task.status,
+            "user_id": user_id,
+            "completed_at": task.completed_at,
+        },
+    )
     return {
         "duplicate": False,
         "task": task_payload(db, task),
