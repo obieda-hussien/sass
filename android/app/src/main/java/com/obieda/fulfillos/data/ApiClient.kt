@@ -59,6 +59,26 @@ class ApiClient {
             authorized = false,
         )
 
+    fun heartbeat(
+        currentTaskId: String?,
+        appVersion: String,
+        connectivity: String,
+        batteryPercent: Int?,
+        lastLocationId: String?,
+        activity: String,
+    ): Result =
+        request(
+            "/devices/heartbeat",
+            JSONObject()
+                .put("current_task_id", currentTaskId ?: JSONObject.NULL)
+                .put("app_version", appVersion)
+                .put("connectivity", connectivity)
+                .put("battery_percent", batteryPercent ?: JSONObject.NULL)
+                .put("last_location_id", lastLocationId ?: JSONObject.NULL)
+                .put("activity", activity)
+                .toString(),
+        )
+
     fun getActiveTask(): Result = request("/me/active-task", null, "GET")
     fun claimNextTask(): Result = request("/tasks/claim-next", "{}")
     fun getMyOffers(): Result = request("/ops/dispatch/me/offers", null, "GET")
