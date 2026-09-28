@@ -262,6 +262,30 @@ export async function issueTemporaryPassword(token: string, resetId: string) {
 }
 
 
+export async function updateEmployeeProfile(
+  session: string,
+  userId: string,
+  payload: {
+    full_name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    address?: string | null;
+    job_title?: string | null;
+    department?: string | null;
+    employment_status?: string | null;
+    base_salary_cents?: number | null;
+    overtime_rate_cents_per_hour?: number | null;
+    grace_minutes?: number | null;
+    notes?: string | null;
+  },
+) {
+  return jsonRequest<Employee>(
+    `/admin/employees/${encodeURIComponent(userId)}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+    session,
+  );
+}
+
 export async function usernameAvailability(
   session: string,
   username: string,
