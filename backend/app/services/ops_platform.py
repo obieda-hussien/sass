@@ -542,6 +542,19 @@ def claim_task(db: Session, task: PickTask, user_id: str, device_id: str) -> Pic
     if order:
         order.status = OrderStatus.PICKING.value
     db.flush()
+    enqueue_outbox(
+        db,
+        topic="order.claimed",
+        aggregate_type="PICK_TASK",
+        aggregate_id=task.id,
+        payload={
+            "task_id": task.id,
+            "order_id": task.order_id,
+            "user_id": user_id,
+            "device_id": device_id,
+            "claimed_at": now,
+        },
+    )
     db.expire(task)
     return db.get(PickTask, task.id)
 
