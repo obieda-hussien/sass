@@ -47,6 +47,7 @@ from ..models_ops import (
     WorkerStateEvent,
 )
 from .compatibility import storage_compatible
+from .eventing import enqueue_outbox
 from .inventory import InventoryError, move_inventory
 from .ops_optimization import (
     destination_has_capacity,
@@ -204,14 +205,29 @@ def set_worker_state(
     state.activity_ref = activity_ref
     state.reason = reason
     state.updated_at = now_utc()
-    db.add(WorkerStateEvent(
+    event = WorkerStateEvent(
         user_id=user_id,
         from_state=previous,
         to_state=normalized,
         activity_ref=activity_ref,
         reason=reason,
-    ))
+    )
+    db.add(event)
     db.flush()
+    enqueue_outbox(
+        db,
+        topic="worker.state.changed",
+        aggregate_type="USER",
+        aggregate_id=user_id,
+        payload={
+            "worker_state_event_id": event.id,
+            "from_state": previous,
+            "to_state": normalized,
+            "activity_ref": activity_ref,
+            "reason": reason,
+            "occurred_at": event.created_at,
+        },
+    )
     return state
 
 
