@@ -1,4 +1,4 @@
-# FulfillOS workflows — v0.4
+# FulfillOS workflows — v0.5
 
 ## 1. Inbound / returns
 
@@ -412,3 +412,97 @@ startup
 → stamp head
 → unlock
 ```
+
+
+## 23. First-login personal PIN
+
+```text
+manager creates employee / resolves reset
+→ numeric temporary PIN (random default = exactly 6 digits)
+→ employee signs in on trusted PDA
+→ must_change_password = true
+→ all warehouse tools remain locked
+→ employee chooses private 6–10 digit personal PIN
+→ old temporary session revoked
+→ rotated authenticated session issued
+→ normal PDA tools unlock
+```
+
+Manager emergency reset can set an explicit 6–10 digit PIN or generate a new six-digit PIN. By default the employee is forced through the personal-PIN flow again.
+
+## 24. PDA presence and Waiting Orders
+
+```text
+PDA authenticated + personal PIN complete
+→ heartbeat every 5 seconds
+→ backend records device/user/current task/activity/battery/location
+→ dispatch requires fresh presence
+→ idle PDA checks active task/open offers every 3 seconds
+→ new broadcast offer appears automatically
+→ picker accepts/rejects
+→ atomic server claim decides the winner
+```
+
+A stale PDA cannot remain dispatchable merely because an old database status says ONLINE.
+
+## 25. Industrial / camera scanner pipeline
+
+```text
+industrial scanner broadcast
+       ┐
+CameraX + ML Kit
+       ├─► ScanBus ► active workflow scanner state machine
+manual test entry
+       ┘
+```
+
+The same source/item/destination validation is reused for pick, inventory, BOH, damage, cycle count, recovery, receive/stow and replenishment screens.
+
+## 26. Browser manager session
+
+```text
+browser login
+→ Next.js BFF
+→ FastAPI login
+→ access + refresh stored as HttpOnly SameSite cookies
+→ CSRF cookie issued
+→ browser calls /web-api/*
+→ BFF adds Authorization server-side
+→ unsafe mutations require CSRF header/cookie match
+```
+
+The FastAPI bearer token is not stored in browser localStorage.
+
+## 27. Account emergency controls
+
+```text
+manager selects employee
+├─ change username
+│    → duplicate check
+│    → same employee ID retained
+│    → sessions revoked
+├─ reset/set PIN
+│    → explicit 6–10 digits OR random 6 digits
+│    → sessions revoked
+│    → optional/normal force-change-next-login
+└─ delete user access
+     → reject if active pick lease exists
+     → soft delete + inactive
+     → sessions revoked
+     → historical orders/payroll/audit preserved
+```
+
+## 28. Transactional outbox
+
+```text
+business command
+→ update authoritative PostgreSQL rows
+→ insert outbox row in SAME transaction
+→ commit
+→ background dispatcher claims available rows
+→ event-stream telemetry / incident webhook
+→ success = PUBLISHED
+→ failure = RETRY with backoff
+```
+
+Current event families include audit actions, worker-state changes, order claims, replenishment completions and incidents.
