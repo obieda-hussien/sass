@@ -296,6 +296,7 @@ export default function OperationsPage() {
               <div className="workerFacts">
                 <span>Active: {worker.active_task_id ? worker.active_task_id.slice(0, 8) : "none"}</span>
                 <span>Qual: {worker.qualifications.join(", ") || "standard"}</span>
+                <span>PDA: {worker.device?.activity?.replaceAll("_", " ") ?? (worker.dispatchable ? "WAITING" : "—")}</span>
                 <span>Battery: {worker.device?.battery_percent ?? "—"}%</span>
                 <span>Last bin: {worker.device?.last_location_id ?? "—"}</span>
               </div>
