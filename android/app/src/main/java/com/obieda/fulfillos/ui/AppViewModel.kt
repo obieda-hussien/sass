@@ -912,8 +912,12 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 busy = false
                 if (summary != null) {
                     unpackSummary = summary
-                    message = "Unpack ${summary.toteLocationId} • scan item barcode"
-                    requestCameraScan("Scan unpack item barcode")
+                    message = when {
+                        !summary.manifestLocked -> "Unpack ${summary.toteLocationId} • scan return bag / SPOO"
+                        summary.completeReady -> "All ${summary.expectedUnits} units verified • ready to finish"
+                        else -> "Unpack ${summary.toteLocationId} • ${summary.verifiedUnits}/${summary.expectedUnits} verified"
+                    }
+                    requestCameraForCurrentContext()
                 } else if (response.code == 401) {
                     expireSession()
                 } else {
