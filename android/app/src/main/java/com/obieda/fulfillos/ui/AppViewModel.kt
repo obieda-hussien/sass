@@ -344,6 +344,14 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     fun finishRecordedActivity() {
         if (!authenticated || busy || currentTask != null) return
+        val manualStates = setOf(
+            "BREAK", "TRAINING", "BIN_CHECK", "EXPIRY_AUDIT",
+            "VENDOR_REMOVAL", "BOH_MOVE", "ENDING_SHIFT",
+        )
+        if (workerState !in manualStates) {
+            errorMessage = "Finish this activity from its operational workflow so the task/session closes correctly"
+            return
+        }
         busy = true
         errorMessage = null
         val endingBreak = workerState == "BREAK"
