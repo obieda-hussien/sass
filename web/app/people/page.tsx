@@ -17,6 +17,7 @@ import {
   getWebSession,
   managerLogout,
   promoteEmployee,
+  updateEmployeeProfile,
   updateEmployeeAccount,
   setEmployeePin,
   deleteEmployee,
@@ -128,6 +129,19 @@ export default function PeoplePage() {
     to_role: "SENIOR_PICKER",
     new_base_salary: "",
     reason: "",
+  });
+  const [profileForm, setProfileForm] = useState({
+    full_name: "",
+    email: "",
+    phone: "",
+    address: "",
+    job_title: "",
+    department: "",
+    employment_status: "ACTIVE",
+    base_salary: "",
+    overtime_rate: "",
+    grace_minutes: "10",
+    notes: "",
   });
   const [accountForm, setAccountForm] = useState({
     username: "",
@@ -273,6 +287,30 @@ export default function PeoplePage() {
     [employees, selectedId],
   );
 
+  const openEmployee = (userId: string) => {
+    setSelectedId(userId);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("user", userId);
+      url.hash = "employee-management";
+      window.history.replaceState({}, "", url);
+      window.setTimeout(() => {
+        document.getElementById("employee-management")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 30);
+    }
+  };
+
+  useEffect(() => {
+    if (employees.length === 0 || selectedId) return;
+    const requested = new URLSearchParams(window.location.search).get("user");
+    if (requested && employees.some((employee) => employee.user_id === requested)) {
+      setSelectedId(requested);
+      window.setTimeout(() => {
+        document.getElementById("employee-management")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
+    }
+  }, [employees, selectedId]);
+
   const promotionTargets = useMemo(() => {
     if (!selectedEmployee) return [...promotionRanks];
     const currentIndex = promotionRanks.indexOf(
@@ -296,9 +334,53 @@ export default function PeoplePage() {
       pin: "",
       delete_reason: "",
     }));
+    if (selectedEmployee.profile) {
+      setProfileForm({
+        full_name: selectedEmployee.profile.full_name,
+        email: selectedEmployee.profile.email ?? "",
+        phone: selectedEmployee.profile.phone ?? "",
+        address: selectedEmployee.profile.address ?? "",
+        job_title: selectedEmployee.profile.job_title,
+        department: selectedEmployee.profile.department,
+        employment_status: selectedEmployee.profile.employment_status,
+        base_salary: (selectedEmployee.profile.base_salary_cents / 100).toFixed(2),
+        overtime_rate: (selectedEmployee.profile.overtime_rate_cents_per_hour / 100).toFixed(2),
+        grace_minutes: String(selectedEmployee.profile.grace_minutes),
+        notes: selectedEmployee.profile.notes ?? "",
+      });
+    }
     setUsernameHint("");
   }, [selectedEmployee?.user_id]);
 
+
+  async function submitProfile(event: FormEvent) {
+    event.preventDefault();
+    if (!token || !selectedEmployee) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await updateEmployeeProfile(token, selectedEmployee.user_id, {
+        full_name: profileForm.full_name.trim(),
+        email: profileForm.email.trim() || null,
+        phone: profileForm.phone.trim() || null,
+        address: profileForm.address.trim() || null,
+        job_title: profileForm.job_title.trim(),
+        department: profileForm.department.trim(),
+        employment_status: profileForm.employment_status,
+        base_salary_cents: Math.round(Number(profileForm.base_salary || "0") * 100),
+        overtime_rate_cents_per_hour: Math.round(Number(profileForm.overtime_rate || "0") * 100),
+        grace_minutes: Number(profileForm.grace_minutes || "0"),
+        notes: profileForm.notes.trim() || null,
+      });
+      setNotice(`Saved ${profileForm.full_name} · salary and profile updated with audit history.`);
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not update employee profile");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function checkUsername(username: string, excludeUserId?: string) {
     if (!token || username.trim().length < 3) return false;
@@ -797,7 +879,7 @@ export default function PeoplePage() {
                   <div className="employeeCardActions">
                     <button
                       className="miniAction"
-                      onClick={() => setSelectedId(item.user_id)}
+                      onClick={() => openEmployee(item.user_id)}
                     >
                       Manage
                     </button>
@@ -833,16 +915,55 @@ export default function PeoplePage() {
       </section>
 
       {selectedEmployee?.profile && (
-        <section id="payroll" className="panel managerPanel">
+        <section id="employee-management" className="panel managerPanel">
           <div className="panelHeading">
             <div>
               <p className="eyebrow">SUPERVISOR ACTIONS</p>
               <h2>{selectedEmployee.profile.full_name}</h2>
             </div>
-            <button className="miniAction" onClick={() => setSelectedId("")}>Close</button>
+            <button className="miniAction" onClick={() => {
+              setSelectedId("");
+              const url = new URL(window.location.href);
+              url.searchParams.delete("user");
+              url.hash = "team";
+              window.history.replaceState({}, "", url);
+            }}>Close</button>
+          </div>
+
+          <div className="employeeManageSummary">
+            <div>
+              <span className="moduleTag">EMPLOYEE</span>
+              <strong>{selectedEmployee.profile.full_name}</strong>
+              <small>{selectedEmployee.profile.employee_code} · @{selectedEmployee.username} · {selectedEmployee.role.replaceAll("_", " ")}</small>
+            </div>
+            <div>
+              <small>Base salary</small>
+              <strong>{money(selectedEmployee.profile.base_salary_cents, selectedEmployee.profile.currency)}</strong>
+            </div>
+            <div>
+              <small>Overtime / hour</small>
+              <strong>{money(selectedEmployee.profile.overtime_rate_cents_per_hour, selectedEmployee.profile.currency)}</strong>
+            </div>
           </div>
 
           <div className="managerForms">
+            <form className="managerForm employeeProfileForm" onSubmit={submitProfile}>
+              <h3>Employee profile & pay</h3>
+              <p className="policyNote">Edit the employee you opened from the dashboard. Salary/profile changes are audited; promotions stay in the separate promotion workflow below.</p>
+              <label><span>Full name</span><input required value={profileForm.full_name} onChange={(e) => setProfileForm({...profileForm, full_name:e.target.value})} /></label>
+              <label><span>Email</span><input type="email" value={profileForm.email} onChange={(e) => setProfileForm({...profileForm, email:e.target.value})} /></label>
+              <label><span>Phone</span><input value={profileForm.phone} onChange={(e) => setProfileForm({...profileForm, phone:e.target.value})} /></label>
+              <label><span>Address</span><input value={profileForm.address} onChange={(e) => setProfileForm({...profileForm, address:e.target.value})} /></label>
+              <label><span>Job title</span><input value={profileForm.job_title} onChange={(e) => setProfileForm({...profileForm, job_title:e.target.value})} /></label>
+              <label><span>Department</span><input value={profileForm.department} onChange={(e) => setProfileForm({...profileForm, department:e.target.value})} /></label>
+              <label><span>Employment status</span><select value={profileForm.employment_status} onChange={(e) => setProfileForm({...profileForm, employment_status:e.target.value})}><option>ACTIVE</option><option>LEAVE</option><option>SUSPENDED</option><option>INACTIVE</option></select></label>
+              <label><span>Base salary (EGP)</span><input type="number" min="0" step="0.01" value={profileForm.base_salary} onChange={(e) => setProfileForm({...profileForm, base_salary:e.target.value})} /></label>
+              <label><span>Overtime / hour (EGP)</span><input type="number" min="0" step="0.01" value={profileForm.overtime_rate} onChange={(e) => setProfileForm({...profileForm, overtime_rate:e.target.value})} /></label>
+              <label><span>Late grace (minutes)</span><input type="number" min="0" max="240" value={profileForm.grace_minutes} onChange={(e) => setProfileForm({...profileForm, grace_minutes:e.target.value})} /></label>
+              <label className="wideField"><span>Notes</span><textarea rows={3} value={profileForm.notes} onChange={(e) => setProfileForm({...profileForm, notes:e.target.value})} /></label>
+              <button className="primaryButton wideField" disabled={busy || selectedEmployee.deleted_at != null}>Save profile & pay</button>
+            </form>
+
             <form className="managerForm" onSubmit={submitUsername}>
               <h3>Account & access</h3>
               <p className="policyNote">Username changes are unique and revoke existing sessions. Operational history stays attached to the same employee ID.</p>
