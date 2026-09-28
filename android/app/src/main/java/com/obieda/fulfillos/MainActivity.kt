@@ -41,6 +41,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.content.ContextCompat
+import com.obieda.fulfillos.data.ScannerBroadcastReceiver
+import com.obieda.fulfillos.data.ScannerIntentAdapter
 import com.obieda.fulfillos.domain.AppScreen
 import com.obieda.fulfillos.domain.ConnectivityState
 import com.obieda.fulfillos.domain.LocationParser
@@ -53,6 +56,30 @@ import java.time.Duration
 import java.time.Instant
 
 class MainActivity : ComponentActivity() {
+    private val scannerReceiver = ScannerBroadcastReceiver()
+    private var scannerReceiverRegistered = false
+
+    override fun onStart() {
+        super.onStart()
+        if (!scannerReceiverRegistered) {
+            ContextCompat.registerReceiver(
+                this,
+                scannerReceiver,
+                ScannerIntentAdapter.filter(),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+            scannerReceiverRegistered = true
+        }
+    }
+
+    override fun onStop() {
+        if (scannerReceiverRegistered) {
+            runCatching { unregisterReceiver(scannerReceiver) }
+            scannerReceiverRegistered = false
+        }
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val graph = (application as FulfillApplication).graph
@@ -88,6 +115,8 @@ private fun FulfillApp(vm: AppViewModel) {
         return
     }
 
+    var cameraOpen by remember { mutableStateOf(false) }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -99,6 +128,7 @@ private fun FulfillApp(vm: AppViewModel) {
                 },
                 actions = {
                     AssistChip(onClick = {}, label = { Text(vm.connectivity.name) })
+                    TextButton(onClick = { cameraOpen = true }) { Text("Camera") }
                     TextButton(onClick = vm::logout) { Text("Logout") }
                 },
             )
@@ -123,6 +153,16 @@ private fun FulfillApp(vm: AppViewModel) {
                 AppScreen.REPLENISHMENT -> ReplenishmentScreen(vm)
             }
         }
+    }
+
+    if (cameraOpen) {
+        CameraScannerOverlay(
+            onScan = { value ->
+                vm.submitScanValue(value)
+                cameraOpen = false
+            },
+            onDismiss = { cameraOpen = false },
+        )
     }
 }
 
