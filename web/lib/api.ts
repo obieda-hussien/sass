@@ -657,6 +657,14 @@ export async function getShipments(token: string) {
   );
 }
 
+export async function managerCloseReceiving(token: string, shipmentId: string) {
+  return jsonRequest<Record<string, any>>(
+    `/ops/shipments/${encodeURIComponent(shipmentId)}/manager-close-receive`,
+    { method: "POST", body: "{}" },
+    token,
+  );
+}
+
 
 export async function getPayrollPolicy(token: string, userId: string) {
   return jsonRequest<{

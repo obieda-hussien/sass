@@ -498,9 +498,60 @@ fun ReceiveScreen(vm: AppViewModel) {
                     if (selected.stowOverdue) Text("Stow SLA overdue", color = MaterialTheme.colorScheme.error)
                 }
             }
+            if (selected.status == "CREATED" || selected.status == "DOCKED") {
+                Text("Shipment zone: ${selected.storageDomain}. Confirm the physical receiving zone.")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("AMBIENT", "CHILLED", "FROZEN").forEach { zone ->
+                        FilterChip(selected = vm.receiveZoneInput == zone,
+                            onClick = { vm.receiveZoneInput = zone }, label = { Text(zone) })
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("PRODUCE", "HAZ", "HRV").forEach { zone ->
+                        FilterChip(selected = vm.receiveZoneInput == zone,
+                            onClick = { vm.receiveZoneInput = zone }, label = { Text(zone) })
+                    }
+                }
+                OutlinedTextField(
+                    value = vm.receiveTemperatureInput,
+                    onValueChange = { vm.receiveTemperatureInput = it.filter { c -> c.isDigit() || c == '-' || c == '.' }.take(7) },
+                    label = { Text("Current temperature °C") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(onClick = vm::openSelectedShipment, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                    Text("Open shipment in ${vm.receiveZoneInput}")
+                }
+            }
             if (selected.status == "RECEIVING") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = !vm.receiveAdhocMode,
+                        onClick = { vm.setReceiveAdhocMode(false) },
+                        label = { Text("Planned receipt") })
+                    FilterChip(selected = vm.receiveAdhocMode,
+                        onClick = { vm.setReceiveAdhocMode(true) },
+                        label = { Text("Ad hoc direct stow") })
+                }
                 vm.receiveProduct?.let { product ->
                     Text(product.title, fontWeight = FontWeight.Bold)
+                    val expectedLine = selected.lines.firstOrNull { it.productId == product.productId }
+                    Text(if (expectedLine == null) "Unplanned item: enter a discrepancy reason below"
+                         else "Expected ${expectedLine.expectedQty} · already received ${expectedLine.receivedQty} · scan quantity and record")
+                    if (vm.receiveAdhocMode) {
+                        OutlinedTextField(
+                            value = vm.receiveAdhocDestination,
+                            onValueChange = { vm.receiveAdhocDestination = it.uppercase() },
+                            label = { Text("Scan destination bin") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Button(onClick = vm::checkAdhocPlacement, modifier = Modifier.fillMaxWidth()) {
+                            Text("Check bin zone")
+                        }
+                        if (vm.receivePlacementHint.isNotBlank()) Text(vm.receivePlacementHint)
+                        expectedLine?.recommendedStow?.take(3)?.let { bins ->
+                            if (bins.isNotEmpty()) Text("Compatible suggestions: ${bins.joinToString()}")
+                        }
+                    }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = vm.receiveGoodQtyInput,
@@ -529,13 +580,21 @@ fun ReceiveScreen(vm: AppViewModel) {
                         label = { Text("Expiry YYYY-MM-DD (optional)") },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Button(onClick = vm::submitReceiveLine, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = vm.receiveDiscrepancyInput,
+                        onValueChange = { vm.receiveDiscrepancyInput = it.take(240) },
+                        label = { Text("Reason for unexpected / excess item") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Button(onClick = if (vm.receiveAdhocMode) vm::submitAdhocStow else vm::submitReceiveLine,
+                        modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Filled.Save, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Record")
+                        Text(if (vm.receiveAdhocMode) "Confirm ad hoc stow" else "Record")
                     }
                 }
-                ScanEntry(vm, "Scan product barcode.")
+                ScanEntry(vm, if (vm.receiveAdhocMode && vm.receiveProduct != null) "Scan destination bin."
+                              else "Scan product barcode.")
                 Button(onClick = vm::completeSelectedReceiving, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.DoneAll, contentDescription = null)
                     Spacer(Modifier.width(8.dp))

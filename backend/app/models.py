@@ -255,6 +255,7 @@ class UnpackSession(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), index=True)
     source_ref: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
+    source_order_id: Mapped[Optional[str]] = mapped_column(ForeignKey("orders.id"), nullable=True, index=True)
     manifest_locked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     expected_units: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -258,8 +258,13 @@ class ApiClient {
 
     fun getShipments(): Result = request("/ops/shipments", null, "GET")
 
-    fun openShipment(shipmentId: String): Result =
-        request("/ops/shipments/${encode(shipmentId)}/open", "{}")
+    fun getShipmentPlacement(shipmentId: String, productId: String, destination: String): Result =
+        request("/ops/shipments/${encode(shipmentId)}/placement?product_id=${encode(productId)}" +
+            "&destination_location_id=${encode(destination)}", null, "GET")
+
+    fun openShipment(shipmentId: String, zone: String, temperatureC: Double): Result =
+        request("/ops/shipments/${encode(shipmentId)}/open", JSONObject()
+            .put("storage_domain", zone).put("opening_temperature_c", temperatureC).toString())
 
     fun receiveShipmentLine(
         shipmentId: String,
@@ -269,6 +274,7 @@ class ApiClient {
         damagedQty: Int = 0,
         lotCode: String? = null,
         expiresOn: String? = null,
+        discrepancyReason: String? = null,
     ): Result =
         request(
             "/ops/shipments/${encode(shipmentId)}/receive",
@@ -279,11 +285,24 @@ class ApiClient {
                 .put("damaged_qty", damagedQty)
                 .put("lot_code", lotCode ?: JSONObject.NULL)
                 .put("expires_on", expiresOn ?: JSONObject.NULL)
+                .put("discrepancy_reason", discrepancyReason ?: JSONObject.NULL)
                 .toString(),
         )
 
     fun completeReceiving(shipmentId: String): Result =
         request("/ops/shipments/${encode(shipmentId)}/complete-receive", "{}")
+
+    fun adhocStowShipmentItem(
+        shipmentId: String, eventId: String, productId: String,
+        destinationLocationId: String, qty: Int, expiresOn: String?,
+        lotCode: String?, reason: String,
+    ): Result = request(
+        "/ops/shipments/${encode(shipmentId)}/adhoc-stow",
+        JSONObject().put("event_id", eventId).put("product_id", productId)
+            .put("destination_location_id", destinationLocationId).put("qty", qty)
+            .put("expires_on", expiresOn ?: JSONObject.NULL)
+            .put("lot_code", lotCode ?: JSONObject.NULL).put("reason", reason).toString(),
+    )
 
     fun getStowRecommendations(taskId: String): Result =
         request("/ops/stow/${encode(taskId)}/recommendations", null, "GET")

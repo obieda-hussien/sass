@@ -163,17 +163,28 @@ def bind_unpack_source(db: Session, session: UnpackSession, source_ref: str) -> 
         if bag is None:
             bag = db.scalar(select(OrderBag).where(OrderBag.spoo_code == ref.upper()))
         if bag is not None:
-            bag_count = len(db.scalars(select(OrderBag).where(OrderBag.order_id == bag.order_id)).all())
-            if bag_count > 1:
-                raise OperationError(
-                    "This order has multiple bags and item-to-bag contents are not recorded. "
-                    "Use an explicit return manifest instead of guessing.",
-                    "MULTI_BAG_MANIFEST_AMBIGUOUS",
-                )
             order = db.get(Order, bag.order_id)
 
     if order is None:
         raise OperationError("No trusted manifest found for this bag/order reference", "UNPACK_SOURCE_NOT_FOUND")
+
+    # A SPOO identifies the order, not the contents of one physical bag. One
+    # scan loads all picked units for this temperature; every other SPOO of the
+    # same order must resolve to the same workflow and cannot be unpacked twice.
+    previous = db.scalar(select(UnpackSession).where(
+        UnpackSession.source_order_id == order.id,
+        UnpackSession.temperature_class == session.temperature_class,
+        UnpackSession.id != session.id,
+    ))
+    if previous:
+        raise OperationError(
+            "This order is already being unpacked or has been completed",
+            "ORDER_ALREADY_UNPACKED",
+        )
+    if session.manifest_locked:
+        if session.source_order_id == order.id:
+            return session
+        raise OperationError("Unpack manifest is already locked to another order", "MANIFEST_ALREADY_BOUND")
 
     lines = db.scalars(select(OrderLine).where(OrderLine.order_id == order.id)).all()
     expected: list[dict] = []
@@ -189,7 +200,10 @@ def bind_unpack_source(db: Session, session: UnpackSession, source_ref: str) -> 
             "The source has no picked items for this temperature class",
             "EMPTY_MANIFEST",
         )
-    return set_unpack_manifest(db, session, expected, source_ref=ref)
+    set_unpack_manifest(db, session, expected, source_ref=f"ORDER:{order.id}")
+    session.source_order_id = order.id
+    db.flush()
+    return session
 
 
 def active_unpack(db: Session, user_id: str, device_id: str, temperature_class: str | None = None) -> UnpackSession | None:

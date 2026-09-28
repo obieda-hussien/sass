@@ -10,6 +10,7 @@ import {
   getReplenishmentQueue,
   generateReplenishment,
   getShipments,
+  managerCloseReceiving,
   getSlottingSuggestions,
   managerLogin,
   getWebSession,
@@ -55,6 +56,7 @@ export default function OperationsPage() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [closingShipmentId, setClosingShipmentId] = useState("");
   const [holdForm, setHoldForm] = useState({
     scope_type: "DOMAIN",
     scope_value: "CHILLED",
@@ -220,6 +222,22 @@ export default function OperationsPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Assignment failed");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function closeReceiving(shipment: Record<string, any>) {
+    if (!token || busy) return;
+    setBusy(true);
+    setClosingShipmentId(String(shipment.id));
+    try {
+      await managerCloseReceiving(token, String(shipment.id));
+      setNotice(`Receiving closed for ${String(shipment.label)}. Missing units recorded.`);
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not close receiving");
+    } finally {
+      setClosingShipmentId("");
       setBusy(false);
     }
   }
@@ -449,7 +467,20 @@ export default function OperationsPage() {
 
       <section id="inbound" className="panel opsSection">
         <div className="panelHeading"><div><p className="eyebrow">INBOUND</p><h2>Shipment & stow pipeline</h2></div><span className="chip">{activeShipments.length} active</span></div>
-        <div className="shipmentGrid">{activeShipments.map((shipment) => <article className="shipmentCard" key={String(shipment.id)}><div><strong>{String(shipment.label)}</strong><small>{String(shipment.shipment_type)} · {String(shipment.storage_domain)}</small></div><span className={`statePill state-${stateClass(String(shipment.status))}`}>{String(shipment.status)}</span><div className="shipmentStats"><span>Expected {Number(shipment.expected_units)}</span><span>Received {Number(shipment.received_units)}</span><span>Damaged {Number(shipment.damaged_units)}</span><span>Missing {Number(shipment.missing_units)}</span></div>{shipment.stow_overdue && <p className="blockReason">Stow target exceeded · {Number(shipment.elapsed_minutes)}m / {Number(shipment.target_stow_minutes)}m</p>}</article>)}</div>
+        <div className="shipmentGrid">{shipments.map((shipment) => <article className="shipmentCard" key={String(shipment.id)}>
+          <div><strong>{String(shipment.label)}</strong><small>{String(shipment.shipment_type)} · {String(shipment.storage_domain)} · {shipment.opening_temperature_c == null ? "temperature pending" : `${Number(shipment.opening_temperature_c)}°C`}</small></div>
+          <span className={`statePill state-${stateClass(String(shipment.status))}`}>{String(shipment.status)}</span>
+          <div className="shipmentStats"><span>Expected {Number(shipment.expected_units)}</span><span>Received {Number(shipment.received_units)}</span><span>Damaged {Number(shipment.damaged_units)}</span><span>Still expected {Number(shipment.remaining_expected_units)}</span><span>Stowed {Number(shipment.stowed_units)} / {Number(shipment.received_units)}</span></div>
+          <p>Receipt {Number(shipment.receive_percent)}% · Putaway {Number(shipment.stow_percent)}%</p>
+          <details><summary>Item discrepancies and putaway</summary>
+            <ul>{(shipment.lines || []).map((line: Record<string, any>) => <li key={String(line.id)}>
+              {String(line.product_id)}: expected {Number(line.expected_qty)}, received {Number(line.received_qty)}, damaged {Number(line.damaged_qty)}, missing {Number(line.remaining_expected_qty)}
+              {line.discrepancy_reason && ` · extra/unplanned: ${String(line.discrepancy_reason)}`}
+            </li>)}</ul>
+          </details>
+          {shipment.status === "RECEIVING" && <button type="button" disabled={busy} onClick={() => void closeReceiving(shipment)}>{closingShipmentId === shipment.id ? "Closing…" : "Close receiving and record missing"}</button>}
+          {shipment.stow_overdue && <p className="blockReason">Stow target exceeded · {Number(shipment.elapsed_minutes)}m / {Number(shipment.target_stow_minutes)}m</p>}
+        </article>)}</div>
       </section>
     </main>
   );

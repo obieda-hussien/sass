@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import Device, EmployeeProfile, PickTask, PickTaskItem, User
+from .models import Device, EmployeeProfile, Location, PickTask, PickTaskItem, Product, User
 from .models_ops import (
     DeviceTelemetry,
     FulfillmentHold,
@@ -29,6 +29,7 @@ from .models_ops import (
     WarehouseNode,
 )
 from .security import authenticate_access
+from .services.compatibility import storage_compatible
 from .services.ops_optimization import (
     create_cycle_count_from_alert,
     create_warehouse_node,
@@ -47,6 +48,7 @@ from .services.ops_optimization import (
 )
 from .services.ops_platform import (
     OpsError,
+    adhoc_stow_shipment_item,
     broadcast_task,
     claim_task,
     clock_in_shift,
@@ -58,6 +60,7 @@ from .services.ops_platform import (
     create_shipment,
     decline_task_offer,
     direct_assign_task,
+    domain_for_location,
     finalize_pick_session,
     get_worker_state,
     grant_qualification,
@@ -252,6 +255,22 @@ class ShipmentReceiveRequest(BaseModel):
     damaged_qty: int = Field(default=0, ge=0)
     lot_code: str | None = None
     expires_on: date | None = None
+    discrepancy_reason: str | None = Field(default=None, max_length=240)
+
+
+class ShipmentOpenRequest(BaseModel):
+    storage_domain: str | None = None
+    opening_temperature_c: float = Field(ge=-50, le=60)
+
+
+class ShipmentAdhocStowRequest(BaseModel):
+    event_id: str
+    product_id: str
+    destination_location_id: str
+    qty: int = Field(gt=0)
+    expires_on: date | None = None
+    lot_code: str | None = None
+    reason: str = Field(min_length=3, max_length=240)
 
 
 class StowCompleteRequest(BaseModel):
@@ -1410,6 +1429,40 @@ def shipment_get(
     return shipment_payload(db, shipment)
 
 
+@router.get("/ops/shipments/{shipment_id}/placement")
+def shipment_item_placement(
+    shipment_id: str,
+    product_id: str,
+    destination_location_id: str | None = None,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    shipment = db.get(Shipment, shipment_id)
+    product = db.get(Product, product_id)
+    if not shipment or not product:
+        raise HTTPException(404, "Shipment or product not found")
+    destination = db.get(Location, destination_location_id) if destination_location_id else None
+    compatible, code = storage_compatible(product, destination) if destination else (None, None)
+    inbound = db.get(Location, shipment.inbound_location_id) if shipment.inbound_location_id else None
+    shipment_compatible = storage_compatible(product, inbound)[0] if inbound else False
+    if not shipment_compatible:
+        compatible, code = False, "SHIPMENT_ZONE_MISMATCH"
+    if destination and (destination.logical or not destination.sellable):
+        compatible, code = False, "NOT_SELLABLE"
+    recommendations = recommend_stow_locations(db, shipment, product_id, 5)
+    return {
+        "product_id": product_id,
+        "item_temperature": product.temperature_class,
+        "item_handling": product.handling_class,
+        "shipment_zone": shipment.storage_domain,
+        "destination_zone": domain_for_location(destination) if destination else None,
+        "destination_compatible": compatible,
+        "shipment_compatible": shipment_compatible,
+        "reason_code": code,
+        "recommended_bins": recommendations,
+    }
+
+
 @router.post("/ops/shipments/{shipment_id}/dock-check-in")
 def shipment_dock(
     shipment_id: str,
@@ -1431,6 +1484,7 @@ def shipment_dock(
 @router.post("/ops/shipments/{shipment_id}/open")
 def shipment_open(
     shipment_id: str,
+    req: ShipmentOpenRequest,
     who=Depends(ops_actor),
     db: Session = Depends(get_db),
 ):
@@ -1445,6 +1499,8 @@ def shipment_open(
                 shipment=shipment,
                 user_id=user.id,
                 device_id=device.id,
+                storage_domain=req.storage_domain,
+                opening_temperature_c=req.opening_temperature_c,
             )
             return {
                 "session_id": session.id,
@@ -1490,6 +1546,7 @@ def shipment_receive(
                 damaged_qty=req.damaged_qty,
                 lot_code=req.lot_code,
                 expires_on=req.expires_on,
+                discrepancy_reason=req.discrepancy_reason,
             )
     except OpsError as exc:
         fail(exc)
@@ -1521,6 +1578,65 @@ def shipment_receive_complete(
             if not session:
                 raise OpsError("No open receiving session", "NO_OPEN_RECEIVING_SESSION")
             return complete_receiving(db, shipment, session)
+    except OpsError as exc:
+        fail(exc)
+
+
+@router.post("/ops/shipments/{shipment_id}/adhoc-stow")
+def shipment_adhoc_stow(
+    shipment_id: str,
+    req: ShipmentAdhocStowRequest,
+    who=Depends(ops_actor),
+    db: Session = Depends(get_db),
+):
+    from .models_ops import ReceivingSession
+    user, device = who
+    try:
+        with db.begin():
+            shipment = db.scalar(select(Shipment).where(Shipment.id == shipment_id).with_for_update())
+            if not shipment:
+                raise HTTPException(404, "Shipment not found")
+            session = db.scalar(select(ReceivingSession).where(
+                ReceivingSession.shipment_id == shipment_id,
+                ReceivingSession.user_id == user.id,
+                ReceivingSession.device_id == device.id,
+            ).order_by(ReceivingSession.started_at.desc()))
+            if not session:
+                raise OpsError("Open the shipment on this PDA first", "NO_OPEN_RECEIVING_SESSION")
+            return adhoc_stow_shipment_item(
+                db, shipment=shipment, session=session, event_id=req.event_id,
+                product_id=req.product_id, destination_location_id=req.destination_location_id,
+                qty=req.qty, expires_on=req.expires_on, lot_code=req.lot_code,
+                reason=req.reason,
+            )
+    except OpsError as exc:
+        fail(exc)
+
+
+@router.post("/ops/shipments/{shipment_id}/manager-close-receive")
+def shipment_manager_close_receive(
+    shipment_id: str,
+    who=Depends(ops_manager),
+    db: Session = Depends(get_db),
+):
+    from .models_ops import ReceivingSession
+    try:
+        with db.begin():
+            shipment = db.get(Shipment, shipment_id)
+            if not shipment:
+                raise HTTPException(404, "Shipment not found")
+            if shipment.status != "RECEIVING":
+                raise OpsError("Shipment is not open for receiving", "INVALID_SHIPMENT_STATE")
+            session = db.scalar(select(ReceivingSession).where(
+                ReceivingSession.shipment_id == shipment_id,
+                ReceivingSession.status == "OPEN",
+            ).order_by(ReceivingSession.started_at.desc()))
+            if not session:
+                raise OpsError("No open receiving session", "NO_OPEN_RECEIVING_SESSION")
+            result = complete_receiving(db, shipment, session)
+            audit_event(db, actor_user_id=who[0].id, action="MANAGER_CLOSE_RECEIVE",
+                        entity_type="SHIPMENT", entity_id=shipment_id, reason="MANAGER_CLOSED_PARTIAL_RECEIPT")
+            return result
     except OpsError as exc:
         fail(exc)
 

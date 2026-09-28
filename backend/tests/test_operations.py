@@ -1,4 +1,5 @@
 from sqlalchemy import select
+import pytest
 
 from app.models import InventoryBalance, Order, OrderLine, PickTask, Product, User, Device
 from app.models_ops import OrderBag
@@ -224,3 +225,33 @@ def test_unpack_can_bind_single_bag_spoo_manifest(db):
     summary = unpack_summary(db, session)
     assert summary["complete_ready"] is True
     assert summary["verified_units"] == 2
+
+
+def test_one_spoo_covers_all_order_bags_and_completed_order_cannot_reopen(db):
+    user, device = actor(db)
+    ambient = product(db, "DEMO-AMBIENT-001")
+    order = Order(external_ref="MULTI-BAG-RETURN", status="COMPLETED")
+    db.add(order)
+    db.flush()
+    db.add(OrderLine(order_id=order.id, product_id=ambient.id, requested_qty=3,
+                     allocated_qty=3, picked_qty=3, shorted_qty=0))
+    task = PickTask(order_id=order.id, status="COMPLETED", expected_units=3)
+    db.add(task)
+    db.flush()
+    for number in (1, 2):
+        db.add(OrderBag(order_id=order.id, task_id=task.id, bag_no=number,
+                        spoo_code=f"SPOO-MULTI-{number}", closed_by_user_id=user.id))
+    db.commit()
+
+    session = start_unpack(db, "AMBIENT", user.id, device.id)
+    bind_unpack_source(db, session, "SPOO-MULTI-1")
+    bind_unpack_source(db, session, "SPOO-MULTI-2")
+    assert unpack_summary(db, session)["expected_units"] == 3
+    scan_unpack(db, session, "multi-return-1", ambient.id, 3)
+    assert complete_unpack(db, session)["status"] == "COMPLETED"
+    db.commit()
+
+    second = start_unpack(db, "AMBIENT", user.id, device.id)
+    with pytest.raises(OperationError) as error:
+        bind_unpack_source(db, second, "SPOO-MULTI-2")
+    assert error.value.code == "ORDER_ALREADY_UNPACKED"

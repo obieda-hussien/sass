@@ -124,6 +124,13 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     var receiveDamagedQtyInput by mutableStateOf("0")
     var receiveLotInput by mutableStateOf("")
     var receiveExpiryInput by mutableStateOf("")
+    var receiveTemperatureInput by mutableStateOf("")
+    var receiveZoneInput by mutableStateOf("")
+    var receiveDiscrepancyInput by mutableStateOf("")
+    var receiveAdhocMode by mutableStateOf(false)
+    var receiveAdhocDestination by mutableStateOf("")
+    var receivePlacementHint by mutableStateOf("")
+        private set
     var selectedStowTaskId by mutableStateOf<String?>(null)
         private set
     var stowDestinationInput by mutableStateOf("")
@@ -290,6 +297,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 selectedShipment == null -> requestCameraScan("Scan shipment label or ID")
                 selectedShipment?.status == "RECEIVING" && receiveProduct == null ->
                     requestCameraScan("Scan received product barcode")
+                selectedShipment?.status == "RECEIVING" && receiveAdhocMode && receiveAdhocDestination.isBlank() ->
+                    requestCameraScan("Scan ad hoc destination bin")
                 selectedShipment?.status == "STOWING" || selectedStowTaskId != null ->
                     requestCameraScan("Scan stow destination bin")
                 else -> Unit
@@ -1075,6 +1084,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         receiveProduct = null
         selectedStowTaskId = null
         stowDestinationInput = ""
+        receiveAdhocDestination = ""
+        receivePlacementHint = ""
         errorMessage = null
         loadShipments()
     }
@@ -1134,13 +1145,29 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     fun selectShipment(shipment: ShipmentSummary) {
         if (busy) return
         selectedShipment = shipment
+        receiveZoneInput = shipment.storageDomain
         receiveProduct = null
         selectedStowTaskId = null
         stowDestinationInput = ""
+        if (shipment.status == "CREATED" || shipment.status == "DOCKED") {
+            message = "Confirm ${shipment.storageDomain} zone and enter current temperature to open"
+            return
+        }
+        message = "${shipment.label} • ${shipment.status}"
+        requestCameraForCurrentContext()
+    }
+
+    fun openSelectedShipment() {
+        val shipment = selectedShipment ?: return
+        val temperature = receiveTemperatureInput.trim().toDoubleOrNull()
+        if (temperature == null) {
+            errorMessage = "Enter the measured temperature in °C"
+            return
+        }
         busy = true
         message = "Opening ${shipment.label}…"
         worker.execute {
-            val response = callWithRefresh { graph.api.openShipment(shipment.id) }
+            val response = callWithRefresh { graph.api.openShipment(shipment.id, receiveZoneInput, temperature) }
             val updated = if (response.ok) runCatching {
                 val root = org.json.JSONObject(response.body)
                 graph.api.parseShipment(root.getJSONObject("shipment").toString())
@@ -1182,6 +1209,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     damagedQty = damaged,
                     lotCode = receiveLotInput.trim().ifBlank { null },
                     expiresOn = receiveExpiryInput.trim().ifBlank { null },
+                    discrepancyReason = receiveDiscrepancyInput.trim().ifBlank { null },
                 )
             }
             ui {
@@ -1190,6 +1218,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     receiveProduct = null
                     receiveGoodQtyInput = "1"
                     receiveDamagedQtyInput = "0"
+                    receiveDiscrepancyInput = ""
                     message = "Receipt saved • scan next item"
                     refreshSelectedShipment()
                     requestCameraScan("Scan next received product barcode")
@@ -1197,6 +1226,74 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
             }
+        }
+    }
+
+    fun submitAdhocStow() {
+        val shipment = selectedShipment ?: return
+        val product = receiveProduct ?: return
+        val qty = receiveGoodQtyInput.toIntOrNull() ?: 0
+        val destination = receiveAdhocDestination.trim().uppercase()
+        val reason = receiveDiscrepancyInput.trim()
+        if (busy) return
+        if (qty <= 0 || destination.isBlank() || reason.length < 3) {
+            errorMessage = "Scan item and destination, then enter quantity and a reason"
+            return
+        }
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.adhocStowShipmentItem(
+                shipment.id, UUID.randomUUID().toString(), product.productId,
+                destination, qty, receiveExpiryInput.trim().ifBlank { null },
+                receiveLotInput.trim().ifBlank { null }, reason,
+            ) }
+            ui {
+                busy = false
+                if (response.ok) {
+                    receiveProduct = null
+                    receiveAdhocDestination = ""
+                    receiveGoodQtyInput = "1"
+                    receiveDiscrepancyInput = ""
+                    message = "Ad hoc stock stowed in $destination • scan next item"
+                    refreshSelectedShipment()
+                    requestCameraScan("Scan next received product barcode")
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun setReceiveAdhocMode(enabled: Boolean) {
+        receiveAdhocMode = enabled
+        receiveProduct = null
+        receiveAdhocDestination = ""
+        receivePlacementHint = ""
+        requestCameraScan("Scan received product barcode")
+    }
+
+    fun checkAdhocPlacement() {
+        val shipment = selectedShipment ?: return
+        val product = receiveProduct ?: return
+        val destination = receiveAdhocDestination.trim().uppercase()
+        if (destination.isBlank()) return
+        worker.execute {
+            val response = callWithRefresh {
+                graph.api.getShipmentPlacement(shipment.id, product.productId, destination)
+            }
+            val hint = if (response.ok) runCatching {
+                val data = org.json.JSONObject(response.body)
+                val suggestions = data.optJSONArray("recommended_bins")
+                val bins = (0 until (suggestions?.length() ?: 0)).take(3).map { index ->
+                    suggestions!!.getJSONObject(index).getString("location_id")
+                }
+                if (data.optBoolean("destination_compatible")) {
+                    "✓ ${data.optString("destination_zone")} zone matches this item"
+                } else {
+                    "Wrong bin (${data.optString("reason_code")}). Suggested: ${bins.joinToString()}"
+                }
+            }.getOrNull() else null
+            ui { receivePlacementHint = hint ?: graph.api.parseConflictMessage(response.body) }
         }
     }
 
@@ -1638,6 +1735,13 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             return
         }
 
+        if (shipment.status == "RECEIVING" && receiveAdhocMode && receiveProduct != null) {
+            receiveAdhocDestination = canonicalLocation(value)
+            message = "Destination $receiveAdhocDestination scanned • enter quantity, date and reason"
+            checkAdhocPlacement()
+            return
+        }
+
         if (shipment.status == "STOWING" || selectedStowTaskId != null) {
             val pending = shipment.stowTasks.firstOrNull { it.id == selectedStowTaskId }
                 ?: shipment.stowTasks.firstOrNull { it.status != "COMPLETED" }
@@ -1654,7 +1758,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
         resolveBarcode(value) { product ->
             receiveProduct = product
-            message = "${product.title} • confirm good/damaged quantity"
+            message = if (receiveAdhocMode) "${product.title} • scan destination bin"
+                      else "${product.title} • confirm good/damaged quantity"
+            if (receiveAdhocMode) requestCameraScan("Scan ad hoc destination bin")
         }
     }
 
