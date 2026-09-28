@@ -66,6 +66,8 @@ export type Employee = {
   username: string;
   role: string;
   active: boolean;
+  must_change_password: boolean;
+  deleted_at: string | null;
   profile: {
     employee_code: string;
     full_name: string;
@@ -97,17 +99,33 @@ export type PasswordResetItem = {
   status: string;
 };
 
+function browserCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = `${name}=`;
+  for (const part of document.cookie.split(";")) {
+    const value = part.trim();
+    if (value.startsWith(prefix)) return decodeURIComponent(value.slice(prefix.length));
+  }
+  return null;
+}
+
 async function jsonRequest<T>(
   path: string,
   init: RequestInit = {},
-  token?: string,
+  _session?: string,
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(apiUrl(path), {
+  const method = (init.method ?? "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = browserCookie("fo_csrf");
+    if (csrf) headers.set("X-CSRF-Token", csrf);
+  }
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  const response = await fetch(`/web-api${normalized}`, {
     ...init,
     headers,
+    credentials: "same-origin",
     cache: "no-store",
   });
   const body = await response.json().catch(() => ({}));
@@ -123,19 +141,51 @@ async function jsonRequest<T>(
 }
 
 export async function managerLogin(username: string, password: string) {
-  return jsonRequest<{
-    access_token: string;
-    refresh_token: string;
+  const response = await fetch("/web-auth/login", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+    cache: "no-store",
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = body?.detail;
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : detail?.message ?? body?.message ?? `Login failed: ${response.status}`,
+    );
+  }
+  return body as {
+    authenticated: true;
+    user_id: string;
     username: string;
     role: string;
-  }>("/auth/login", {
+  };
+}
+
+export async function getWebSession() {
+  const response = await fetch("/web-auth/session", {
+    method: "GET",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) return { authenticated: false as const };
+  return response.json() as Promise<{
+    authenticated: true;
+    user_id: string;
+    username: string;
+    role: string;
+    device_id: string;
+  }>;
+}
+
+export async function managerLogout() {
+  await fetch("/web-auth/logout", {
     method: "POST",
-    body: JSON.stringify({
-      username,
-      password,
-      device_id: "WEB-CONTROL-TOWER",
-      app_version: "web-0.5.0",
-    }),
+    credentials: "same-origin",
+    cache: "no-store",
   });
 }
 
@@ -176,6 +226,69 @@ export async function issueTemporaryPassword(token: string, resetId: string) {
     `/admin/password-resets/${resetId}/issue-temporary-password`,
     { method: "POST", body: JSON.stringify({}) },
     token,
+  );
+}
+
+
+export async function usernameAvailability(
+  session: string,
+  username: string,
+  excludeUserId?: string,
+) {
+  const search = new URLSearchParams();
+  if (excludeUserId) search.set("exclude_user_id", excludeUserId);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return jsonRequest<{ username: string; available: boolean }>(
+    `/admin/usernames/${encodeURIComponent(username)}/availability${suffix}`,
+    {},
+    session,
+  );
+}
+
+export async function updateEmployeeAccount(
+  session: string,
+  userId: string,
+  username: string,
+) {
+  return jsonRequest<{ user_id: string; username: string; sessions_revoked: boolean }>(
+    `/admin/employees/${encodeURIComponent(userId)}/account`,
+    { method: "PATCH", body: JSON.stringify({ username }) },
+    session,
+  );
+}
+
+export async function setEmployeePin(
+  session: string,
+  userId: string,
+  payload: { password?: string | null; require_change_on_next_login?: boolean },
+) {
+  return jsonRequest<{
+    user_id: string;
+    temporary_password: string;
+    must_change_password: boolean;
+    sessions_revoked: boolean;
+    warning: string;
+  }>(
+    `/admin/employees/${encodeURIComponent(userId)}/set-pin`,
+    { method: "POST", body: JSON.stringify(payload) },
+    session,
+  );
+}
+
+export async function deleteEmployee(
+  session: string,
+  userId: string,
+  reason: string,
+) {
+  return jsonRequest<{
+    user_id: string;
+    deleted: boolean;
+    active: boolean;
+    deleted_at: string | null;
+  }>(
+    `/admin/employees/${encodeURIComponent(userId)}`,
+    { method: "DELETE", body: JSON.stringify({ reason }) },
+    session,
   );
 }
 
