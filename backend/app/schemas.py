@@ -24,6 +24,7 @@ class SessionResponse(BaseModel):
     username: str
     role: str
     device_id: str
+    must_change_password: bool = False
 
 
 class HeartbeatRequest(BaseModel):
