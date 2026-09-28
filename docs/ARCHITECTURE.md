@@ -405,3 +405,10 @@ v0.5 instruments FastAPI and SQLAlchemy with OpenTelemetry. HTTP request count, 
 An authenticated PDA emits a heartbeat every five seconds. Dispatch requires a recent online PDA heartbeat, not merely a stale database `ONLINE` flag. While online and idle, Android polls active task/open offers every three seconds so Waiting Orders appear without manual refresh.
 
 Industrial scanner broadcasts and CameraX/ML Kit feed the same ScanBus and therefore the same workflow validation path.
+
+
+## 14. PDA foreground presence and scan intent
+
+Foreground/background lifecycle is explicit. When the PDA resumes it emits an immediate ONLINE heartbeat and immediately refreshes active work/offers. When it leaves the foreground it emits an OFFLINE / APP_BACKGROUND heartbeat where network access is still available; the normal freshness TTL remains the fallback when that final heartbeat cannot be delivered.
+
+Camera scanning is driven by workflow transitions rather than by a generic button. Each scan-required state emits a camera request event. This avoids continuous reopen loops while still moving naturally through bin → item → destination → bag/SPOO steps.
