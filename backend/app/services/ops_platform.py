@@ -349,21 +349,75 @@ def broadcast_task(db: Session, task: PickTask, *, ttl_seconds: int = 90) -> dic
 
 def my_open_offers(db: Session, user_id: str) -> list[PickOffer]:
     now = now_utc()
-    offers = db.scalars(
+
+    # Close stale offers first.
+    existing_offers = db.scalars(
         select(PickOffer)
         .where(PickOffer.user_id == user_id, PickOffer.status == "OPEN")
         .order_by(PickOffer.offered_at)
     ).all()
-    result = []
-    for offer in offers:
+    for offer in existing_offers:
         if offer.expires_at and _utc(offer.expires_at) <= now:
             offer.status = "EXPIRED"
             offer.closed_at = now
-        else:
-            result.append(offer)
-    db.flush()
-    return result
 
+    # A picker may come online after an order was originally broadcast. Polling
+    # the waiting queue therefore backfills an offer for currently eligible,
+    # unowned READY/OFFERED work instead of requiring a manual refresh/rebroadcast.
+    user = db.get(User, user_id)
+    if user is not None and worker_dispatch_status(db, user)["dispatchable"]:
+        candidates = db.execute(
+            select(PickTask, Order)
+            .join(Order, Order.id == PickTask.order_id)
+            .where(
+                PickTask.assigned_user_id.is_(None),
+                PickTask.status.in_([TaskStatus.READY.value, TaskStatus.OFFERED.value]),
+            )
+            .order_by(Order.priority.desc(), Order.created_at.asc())
+            .limit(20)
+        ).all()
+        for task, order in candidates:
+            if not worker_dispatch_status(db, user, task)["dispatchable"]:
+                continue
+            offer = db.scalar(
+                select(PickOffer).where(
+                    PickOffer.task_id == task.id,
+                    PickOffer.user_id == user_id,
+                )
+            )
+            if offer is None:
+                offer = PickOffer(
+                    task_id=task.id,
+                    user_id=user_id,
+                    status="OPEN",
+                    offered_at=now,
+                    expires_at=now + timedelta(seconds=90),
+                )
+                db.add(offer)
+            elif offer.status != "OPEN" or (
+                offer.expires_at is not None and _utc(offer.expires_at) <= now
+            ):
+                offer.status = "OPEN"
+                offer.offered_at = now
+                offer.expires_at = now + timedelta(seconds=90)
+                offer.closed_at = None
+
+            if task.status == TaskStatus.READY.value:
+                task.status = TaskStatus.OFFERED.value
+                task.offered_at = now
+                task.server_version += 1
+                order.status = OrderStatus.OFFERED.value
+
+    db.flush()
+    return db.scalars(
+        select(PickOffer)
+        .where(
+            PickOffer.user_id == user_id,
+            PickOffer.status == "OPEN",
+            or_(PickOffer.expires_at.is_(None), PickOffer.expires_at > now),
+        )
+        .order_by(PickOffer.offered_at)
+    ).all()
 
 def _acquire_lease(
     db: Session,
