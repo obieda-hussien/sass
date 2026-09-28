@@ -103,7 +103,7 @@ export default function OperationsPage() {
   useEffect(() => {
     if (!token) return;
     void refresh(token);
-    const timer = window.setInterval(() => void refresh(token), 5_000);
+    const timer = window.setInterval(() => void refresh(token), 3_000);
     return () => window.clearInterval(timer);
   }, [token, selectedTask]);
 
@@ -305,14 +305,19 @@ export default function OperationsPage() {
             <article className={`workerCard ${worker.dispatchable ? "workerAvailable" : "workerBlocked"}`} key={worker.user_id}>
               <div className="workerTop">
                 <div><strong>{worker.full_name}</strong><small>@{worker.username}</small></div>
-                <span className={`statePill state-${stateClass(worker.state)}`}>{worker.state}</span>
+                <span className={`statePill state-${stateClass(worker.device_live ? worker.state : "OFFLINE")}`}>
+                  {worker.device_live ? worker.state : "PDA OFFLINE"}
+                </span>
               </div>
               <div className="workerFacts">
                 <span>Active: {worker.active_task_id ? worker.active_task_id.slice(0, 8) : "none"}</span>
                 <span>Qual: {worker.qualifications.join(", ") || "standard"}</span>
-                <span>PDA: {worker.device?.activity?.replaceAll("_", " ") ?? (worker.dispatchable ? "WAITING" : "—")}</span>
+                <span>PDA: {worker.device_live
+                  ? (worker.device?.activity?.replaceAll("_", " ") ?? "WAITING FOR ORDER")
+                  : "OFFLINE"}</span>
                 <span>Battery: {worker.device?.battery_percent ?? "—"}%</span>
                 <span>Last bin: {worker.device?.last_location_id ?? "—"}</span>
+                <span>Last seen: {worker.device_last_seen_at ? new Date(worker.device_last_seen_at).toLocaleTimeString() : "never"}</span>
               </div>
               {!worker.dispatchable && <p className="blockReason">{worker.reasons.join(" · ")}</p>}
               {selectedTask && (
