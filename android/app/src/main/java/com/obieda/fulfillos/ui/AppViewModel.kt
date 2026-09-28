@@ -94,6 +94,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         private set
     var operationScanPhase by mutableStateOf(OperationScanPhase.SOURCE)
         private set
+    var operationAwaitingConfirmation by mutableStateOf(false)
+        private set
 
     var unpackTemperature by mutableStateOf("AMBIENT")
     var unpackSummary by mutableStateOf<UnpackSummary?>(null)
@@ -253,12 +255,21 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 else -> Unit
             }
             AppScreen.INVENTORY -> requestCameraScan("Scan a bin or item barcode")
-            AppScreen.UNPACK -> if (unpackSummary?.status == "OPEN") requestCameraScan("Scan unpack item barcode")
-            AppScreen.BOH -> when (operationScanPhase) {
-                OperationScanPhase.SOURCE -> requestCameraScan("Scan source bin")
-                OperationScanPhase.ITEM -> requestCameraScan("Scan item barcode")
-                OperationScanPhase.DESTINATION -> requestCameraScan("Scan destination bin")
-                OperationScanPhase.SYNCING -> Unit
+            AppScreen.UNPACK -> unpackSummary?.let { unpack ->
+                when {
+                    unpack.status != "OPEN" -> Unit
+                    !unpack.manifestLocked -> requestCameraScan("Scan return bag / SPOO")
+                    !unpack.completeReady -> requestCameraScan("Scan unpack item barcode")
+                    else -> Unit
+                }
+            }
+            AppScreen.BOH -> if (!operationAwaitingConfirmation) {
+                when (operationScanPhase) {
+                    OperationScanPhase.SOURCE -> requestCameraScan("Scan source bin")
+                    OperationScanPhase.ITEM -> requestCameraScan("Scan item barcode")
+                    OperationScanPhase.DESTINATION -> requestCameraScan("Scan destination bin")
+                    OperationScanPhase.SYNCING -> Unit
+                }
             }
             AppScreen.DAMAGE -> when (operationScanPhase) {
                 OperationScanPhase.SOURCE -> requestCameraScan("Scan source bin")
@@ -1328,6 +1339,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         operationProduct = null
         operationQtyInput = "1"
         operationScanPhase = OperationScanPhase.SOURCE
+        operationAwaitingConfirmation = false
     }
 
     private fun resolveBarcode(
