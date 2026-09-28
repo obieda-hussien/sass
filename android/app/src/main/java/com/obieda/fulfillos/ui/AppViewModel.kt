@@ -1430,6 +1430,14 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             message = "Start a new unpack session first"
             return
         }
+        if (!unpack.manifestLocked) {
+            bindCurrentUnpackSource(value)
+            return
+        }
+        if (unpack.completeReady) {
+            message = "Manifest already complete • finish unpack"
+            return
+        }
         resolveBarcode(value) { product ->
             operationProduct = product
             graph.operations.enqueue(
@@ -1439,7 +1447,29 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 qty = operationQtyInput.toIntOrNull()?.coerceAtLeast(1) ?: 1,
                 onResult = ::handleOperationSync,
             )
-            message = "Unpack scan persisted • awaiting ACK"
+            message = "Item recorded • reconciling manifest"
+        }
+    }
+
+    private fun bindCurrentUnpackSource(sourceRef: String) {
+        val unpack = unpackSummary ?: return
+        if (busy) return
+        busy = true
+        message = "Loading expected bag contents…"
+        worker.execute {
+            val response = callWithRefresh { graph.api.bindUnpackSource(unpack.sessionId, sourceRef) }
+            val updated = if (response.ok) runCatching { graph.api.parseUnpack(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (updated != null) {
+                    unpackSummary = updated
+                    message = "Manifest loaded • ${updated.expectedUnits} units expected"
+                    requestCameraForCurrentContext()
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                    message = "Could not verify bag manifest"
+                }
+            }
         }
     }
 
