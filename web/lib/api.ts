@@ -1,3 +1,35 @@
+export type AuditEvent = {
+  id: string;
+  actor_user_id: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  field_name: string | null;
+  old_value_json: string | null;
+  new_value_json: string | null;
+  reason: string | null;
+  request_id: string | null;
+  created_at: string;
+};
+
+export type EffectivePermissions = {
+  user_id: string;
+  role: string;
+  permissions: string[];
+  role_overrides: Array<{ permission: string; allowed: boolean }>;
+  user_overrides: Array<{ permission: string; allowed: boolean }>;
+};
+
+export type SystemHealth = {
+  version: string;
+  database: string;
+  telemetry: string;
+  outbox: { pending: number; published: number; failed: number };
+  otel_exporter_configured: boolean;
+  incident_webhook_configured: boolean;
+  server_time: string;
+};
+
 export type Summary = {
   associates: Record<string, number>;
   tasks: Record<string, number>;
@@ -756,5 +788,61 @@ export async function assignShift(
     "/ops/shifts/assignments",
     { method: "POST", body: JSON.stringify(payload) },
     token,
+  );
+}
+
+
+export async function getSystemHealth(session: string) {
+  return jsonRequest<SystemHealth>("/admin/system/health", {}, session);
+}
+
+export async function getAuditEvents(
+  session: string,
+  params: { entity_type?: string; entity_id?: string; limit?: number } = {},
+) {
+  const search = new URLSearchParams();
+  if (params.entity_type) search.set("entity_type", params.entity_type);
+  if (params.entity_id) search.set("entity_id", params.entity_id);
+  search.set("limit", String(params.limit ?? 100));
+  return jsonRequest<{ events: AuditEvent[] }>(
+    `/ops/audit?${search.toString()}`,
+    {},
+    session,
+  );
+}
+
+export async function getMyPermissions(session: string) {
+  return jsonRequest<EffectivePermissions>("/ops/permissions/me", {}, session);
+}
+
+export async function setRolePermission(
+  session: string,
+  role: string,
+  permission: string,
+  allowed: boolean,
+) {
+  return jsonRequest<{ role: string; permission: string; allowed: boolean }>(
+    `/ops/permissions/roles/${encodeURIComponent(role)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ permission, allowed }),
+    },
+    session,
+  );
+}
+
+export async function setUserPermission(
+  session: string,
+  userId: string,
+  permission: string,
+  allowed: boolean,
+) {
+  return jsonRequest<{ user_id: string; permission: string; allowed: boolean }>(
+    `/ops/permissions/users/${encodeURIComponent(userId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ permission, allowed }),
+    },
+    session,
   );
 }
