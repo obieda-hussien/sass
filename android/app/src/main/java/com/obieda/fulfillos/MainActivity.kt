@@ -9,6 +9,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.AssistChip
@@ -178,18 +186,27 @@ private fun FulfillApp(vm: AppViewModel) {
                 .fillMaxSize()
         ) {
             ConnectionBanner(vm.connectivity, vm.message, vm.errorMessage, vm::clearError)
-            when (vm.screen) {
-                AppScreen.HOME -> HomeScreen(vm)
-                AppScreen.ACTIVITY -> ActivityRecorderScreen(vm)
-                AppScreen.PICK -> PickScreen(vm)
-                AppScreen.INVENTORY -> InventoryScreen(vm)
-                AppScreen.UNPACK -> UnpackScreen(vm)
-                AppScreen.BOH -> BohMoveScreen(vm)
-                AppScreen.DAMAGE -> DamageScreen(vm)
-                AppScreen.CYCLE_COUNT -> CycleCountScreen(vm)
-                AppScreen.RECOVERY -> RecoveryScreen(vm)
-                AppScreen.RECEIVE -> ReceiveScreen(vm)
-                AppScreen.REPLENISHMENT -> ReplenishmentScreen(vm)
+            AnimatedContent(
+                targetState = vm.screen,
+                transitionSpec = {
+                    (fadeIn(tween(120)) + slideInHorizontally(tween(170)) { it / 12 }) togetherWith
+                        (fadeOut(tween(90)) + slideOutHorizontally(tween(120)) { -it / 16 })
+                },
+                label = "pda-screen",
+            ) { screen ->
+                when (screen) {
+                    AppScreen.HOME -> HomeScreen(vm)
+                    AppScreen.ACTIVITY -> ActivityRecorderScreen(vm)
+                    AppScreen.PICK -> PickScreen(vm)
+                    AppScreen.INVENTORY -> InventoryScreen(vm)
+                    AppScreen.UNPACK -> UnpackScreen(vm)
+                    AppScreen.BOH -> BohMoveScreen(vm)
+                    AppScreen.DAMAGE -> DamageScreen(vm)
+                    AppScreen.CYCLE_COUNT -> CycleCountScreen(vm)
+                    AppScreen.RECOVERY -> RecoveryScreen(vm)
+                    AppScreen.RECEIVE -> ReceiveScreen(vm)
+                    AppScreen.REPLENISHMENT -> ReplenishmentScreen(vm)
+                }
             }
         }
     }
@@ -327,7 +344,9 @@ private fun ConnectionBanner(
     }
     Surface(tonalElevation = 1.dp) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 7.dp),
+            Modifier.fillMaxWidth()
+                .animateContentSize(animationSpec = tween(120))
+                .padding(horizontal = 14.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
