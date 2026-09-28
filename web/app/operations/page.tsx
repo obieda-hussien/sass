@@ -304,7 +304,14 @@ export default function OperationsPage() {
           {workers.map((worker) => (
             <article className={`workerCard ${worker.dispatchable ? "workerAvailable" : "workerBlocked"}`} key={worker.user_id}>
               <div className="workerTop">
-                <div><strong>{worker.full_name}</strong><small>@{worker.username}</small></div>
+                <a
+                  className="workerIdentityLink"
+                  href={`/people?user=${encodeURIComponent(worker.user_id)}#employee-management`}
+                  title="Open employee management"
+                >
+                  <strong>{worker.full_name}</strong>
+                  <small>@{worker.username} · Manage employee</small>
+                </a>
                 <span className={`statePill state-${stateClass(worker.device_live ? worker.state : "OFFLINE")}`}>
                   {worker.device_live ? worker.state : "PDA OFFLINE"}
                 </span>
@@ -320,6 +327,12 @@ export default function OperationsPage() {
                 <span>Last seen: {worker.device_last_seen_at ? new Date(worker.device_last_seen_at).toLocaleTimeString() : "never"}</span>
               </div>
               {!worker.dispatchable && <p className="blockReason">{worker.reasons.join(" · ")}</p>}
+              <div className="workerCardActions">
+                <a className="miniAction" href={`/people?user=${encodeURIComponent(worker.user_id)}#employee-management`}>
+                  Manage employee
+                </a>
+                {worker.active_task_id && <a className="miniAction" href={`#orders`} onClick={() => setQuery(worker.username)}>Find orders</a>}
+              </div>
               {selectedTask && (
                 <button className="primaryButton" disabled={!worker.dispatchable || busy} onClick={() => void assign(selectedTask, worker)}>
                   Assign this order
@@ -390,7 +403,7 @@ export default function OperationsPage() {
       <section id="insights" className="panelGrid operationsGrid">
         <article className="panel">
           <div className="panelHeading"><div><p className="eyebrow">PICKER METRICS</p><h2>Operational performance</h2></div></div>
-          <div className="tableWrap"><table><thead><tr><th>Picker</th><th>Orders</th><th>Items</th><th>Bags</th><th>Late SLAM</th><th>Avg pick</th></tr></thead><tbody>{performance.map((row) => <tr key={row.user_id}><td>{row.full_name}</td><td>{row.orders}</td><td>{row.items}</td><td>{row.bags}</td><td>{row.late_slam} ({row.late_slam_rate}%)</td><td>{minutesLabel(row.avg_pick_seconds)}</td></tr>)}</tbody></table></div>
+          <div className="tableWrap"><table><thead><tr><th>Picker</th><th>Orders</th><th>Items</th><th>Bags</th><th>Late SLAM</th><th>Avg pick</th></tr></thead><tbody>{performance.map((row) => <tr key={row.user_id}><td><a className="tablePersonLink" href={`/people?user=${encodeURIComponent(row.user_id)}#employee-management`}>{row.full_name}</a></td><td>{row.orders}</td><td>{row.items}</td><td>{row.bags}</td><td>{row.late_slam} ({row.late_slam_rate}%)</td><td>{minutesLabel(row.avg_pick_seconds)}</td></tr>)}</tbody></table></div>
           <p className="policyNote">These are operational facts for review; promotion and pay changes are never automatic from a score.</p>
         </article>
 
