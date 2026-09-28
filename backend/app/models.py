@@ -254,8 +254,21 @@ class UnpackSession(Base):
     status: Mapped[str] = mapped_column(String(24), default="OPEN", index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), index=True)
+    source_ref: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
+    manifest_locked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    expected_units: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UnpackManifestLine(Base):
+    __tablename__ = "unpack_manifest_lines"
+    __table_args__ = (UniqueConstraint("session_id", "product_id", name="uq_unpack_manifest_product"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    session_id: Mapped[str] = mapped_column(ForeignKey("unpack_sessions.id"), index=True)
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id"), index=True)
+    expected_qty: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class UnpackEntry(Base):
