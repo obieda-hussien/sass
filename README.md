@@ -10,8 +10,8 @@ _Status snapshot: 28 September 2026._
 
 | Component | Current state |
 | --- | --- |
-| FulfillOS release | **v0.5.0** |
-| Android | Kotlin + Jetpack Compose, versionCode **6**, minSdk 26, targetSdk 36 |
+| FulfillOS release | **v0.5.1** |
+| Android | Kotlin + Jetpack Compose, versionCode **7**, minSdk 26, targetSdk 36 |
 | API | FastAPI + SQLAlchemy |
 | Primary database | PostgreSQL / Neon |
 | Schema management | **Alembic** with safe pre-Alembic baseline + startup migration runner |
@@ -24,6 +24,18 @@ _Status snapshot: 28 September 2026._
 | Release line | FulfillOS v0.5 UX/realtime/security hardening |
 
 The latest `main` build/deploy checks are green. Production deployment validates `/api/health`, PostgreSQL connectivity, telemetry connectivity, the web root, and then builds production-connected Android APK artifacts.
+
+## v0.5.1 scanner & presence patch
+
+v0.5.1 tightens the PDA experience:
+
+- the Android app publishes an immediate foreground heartbeat on resume and an explicit OFFLINE/background heartbeat on pause;
+- stale activity such as `WAITING_FOR_ORDER` is never rendered as live when the PDA heartbeat is offline/stale;
+- the Operations Console refreshes picker presence every 3 seconds;
+- camera scanning is context-driven: inventory search, accepted/direct-assigned pick work, bin/item transitions, SPOO, unpack, BOH, damage, cycle count, recovery, receive/stow and replenishment request the camera automatically when the next step needs a scan;
+- industrial scanner broadcasts and the camera still feed the same ScanBus and server-side validation.
+
+Broadcast offers do **not** cover the screen with a camera before the worker accepts them; the camera opens immediately after acceptance when the first physical scan is actually required.
 
 ## What v0.5 contains
 
@@ -412,7 +424,7 @@ GitHub Actions currently validates:
 - production web root;
 - production-connected Android artifacts.
 
-The production APK artifact name is generated from Gradle version metadata, e.g. `FulfillOS-v0.5.0-production-apks`.
+The production APK artifact name is generated from Gradle version metadata, e.g. `FulfillOS-v0.5.1-production-apks`.
 
 ## What remains
 
