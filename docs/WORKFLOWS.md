@@ -29,6 +29,25 @@ Receiving can capture:
 - lot;
 - expiry.
 
+The PDA opens a shipment after the worker confirms its declared storage zone and
+records a current temperature in °C. Each received item is checked against
+the shipment's temperature and handling domain. Unexpected or excess units
+need a discrepancy reason. An ad hoc direct-stow mode scans the item barcode,
+then a compatible destination bin, and records quantity, lot and expiry before
+one atomic inventory movement. Regular received stock remains in inbound
+until its stow task is scanned. A manager can
+close an open receipt with a shortfall, preserving the expected, received,
+damaged, missing and stowed quantities per item. The Operations dashboard
+shows separate receipt and putaway percentages, so an item received but still
+in the inbound location is not reported as stowed.
+
+For returned orders with several SPOO bags, scanning any one SPOO loads the
+picked manifest of the **whole order** for the selected temperature class.
+The worker verifies every physical unit before completing unpack. The order
+and temperature can be bound to only one unpack session; other SPOOs cannot
+start another unpack after completion. This is an order-wide check because
+individual item-to-bag assignments are not recorded.
+
 Chilled/frozen receiving exposes a target-stow timer.
 
 ## 2. Outbound picking

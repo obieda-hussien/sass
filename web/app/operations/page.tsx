@@ -10,6 +10,7 @@ import {
   getReplenishmentQueue,
   generateReplenishment,
   getShipments,
+  managerCloseReceiving,
   getSlottingSuggestions,
   managerLogin,
   getWebSession,
@@ -55,6 +56,7 @@ export default function OperationsPage() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [closingShipmentId, setClosingShipmentId] = useState("");
   const [holdForm, setHoldForm] = useState({
     scope_type: "DOMAIN",
     scope_value: "CHILLED",
@@ -224,6 +226,22 @@ export default function OperationsPage() {
     }
   }
 
+  async function closeReceiving(shipment: Record<string, any>) {
+    if (!token || busy) return;
+    setBusy(true);
+    setClosingShipmentId(String(shipment.id));
+    try {
+      await managerCloseReceiving(token, String(shipment.id));
+      setNotice(`Receiving closed for ${String(shipment.label)}. Missing units recorded.`);
+      await refresh(token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not close receiving");
+    } finally {
+      setClosingShipmentId("");
+      setBusy(false);
+    }
+  }
+
   const activeHolds = holds.filter((item) => item.active && item.effective);
   const availableWorkers = workers.filter((item) => item.dispatchable);
   const activeShipments = shipments.filter((item) => item.status !== "COMPLETED");
@@ -304,7 +322,14 @@ export default function OperationsPage() {
           {workers.map((worker) => (
             <article className={`workerCard ${worker.dispatchable ? "workerAvailable" : "workerBlocked"}`} key={worker.user_id}>
               <div className="workerTop">
-                <div><strong>{worker.full_name}</strong><small>@{worker.username}</small></div>
+                <a
+                  className="workerIdentityLink"
+                  href={`/people?user=${encodeURIComponent(worker.user_id)}#employee-management`}
+                  title="Open employee management"
+                >
+                  <strong>{worker.full_name}</strong>
+                  <small>@{worker.username} · Manage employee</small>
+                </a>
                 <span className={`statePill state-${stateClass(worker.device_live ? worker.state : "OFFLINE")}`}>
                   {worker.device_live ? worker.state : "PDA OFFLINE"}
                 </span>
@@ -320,6 +345,12 @@ export default function OperationsPage() {
                 <span>Last seen: {worker.device_last_seen_at ? new Date(worker.device_last_seen_at).toLocaleTimeString() : "never"}</span>
               </div>
               {!worker.dispatchable && <p className="blockReason">{worker.reasons.join(" · ")}</p>}
+              <div className="workerCardActions">
+                <a className="miniAction" href={`/people?user=${encodeURIComponent(worker.user_id)}#employee-management`}>
+                  Manage employee
+                </a>
+                {worker.active_task_id && <a className="miniAction" href={`#orders`} onClick={() => setQuery(worker.username)}>Find orders</a>}
+              </div>
               {selectedTask && (
                 <button className="primaryButton" disabled={!worker.dispatchable || busy} onClick={() => void assign(selectedTask, worker)}>
                   Assign this order
@@ -390,7 +421,7 @@ export default function OperationsPage() {
       <section id="insights" className="panelGrid operationsGrid">
         <article className="panel">
           <div className="panelHeading"><div><p className="eyebrow">PICKER METRICS</p><h2>Operational performance</h2></div></div>
-          <div className="tableWrap"><table><thead><tr><th>Picker</th><th>Orders</th><th>Items</th><th>Bags</th><th>Late SLAM</th><th>Avg pick</th></tr></thead><tbody>{performance.map((row) => <tr key={row.user_id}><td>{row.full_name}</td><td>{row.orders}</td><td>{row.items}</td><td>{row.bags}</td><td>{row.late_slam} ({row.late_slam_rate}%)</td><td>{minutesLabel(row.avg_pick_seconds)}</td></tr>)}</tbody></table></div>
+          <div className="tableWrap"><table><thead><tr><th>Picker</th><th>Orders</th><th>Items</th><th>Bags</th><th>Late SLAM</th><th>Avg pick</th></tr></thead><tbody>{performance.map((row) => <tr key={row.user_id}><td><a className="tablePersonLink" href={`/people?user=${encodeURIComponent(row.user_id)}#employee-management`}>{row.full_name}</a></td><td>{row.orders}</td><td>{row.items}</td><td>{row.bags}</td><td>{row.late_slam} ({row.late_slam_rate}%)</td><td>{minutesLabel(row.avg_pick_seconds)}</td></tr>)}</tbody></table></div>
           <p className="policyNote">These are operational facts for review; promotion and pay changes are never automatic from a score.</p>
         </article>
 
@@ -436,7 +467,20 @@ export default function OperationsPage() {
 
       <section id="inbound" className="panel opsSection">
         <div className="panelHeading"><div><p className="eyebrow">INBOUND</p><h2>Shipment & stow pipeline</h2></div><span className="chip">{activeShipments.length} active</span></div>
-        <div className="shipmentGrid">{activeShipments.map((shipment) => <article className="shipmentCard" key={String(shipment.id)}><div><strong>{String(shipment.label)}</strong><small>{String(shipment.shipment_type)} · {String(shipment.storage_domain)}</small></div><span className={`statePill state-${stateClass(String(shipment.status))}`}>{String(shipment.status)}</span><div className="shipmentStats"><span>Expected {Number(shipment.expected_units)}</span><span>Received {Number(shipment.received_units)}</span><span>Damaged {Number(shipment.damaged_units)}</span><span>Missing {Number(shipment.missing_units)}</span></div>{shipment.stow_overdue && <p className="blockReason">Stow target exceeded · {Number(shipment.elapsed_minutes)}m / {Number(shipment.target_stow_minutes)}m</p>}</article>)}</div>
+        <div className="shipmentGrid">{shipments.map((shipment) => <article className="shipmentCard" key={String(shipment.id)}>
+          <div><strong>{String(shipment.label)}</strong><small>{String(shipment.shipment_type)} · {String(shipment.storage_domain)} · {shipment.opening_temperature_c == null ? "temperature pending" : `${Number(shipment.opening_temperature_c)}°C`}</small></div>
+          <span className={`statePill state-${stateClass(String(shipment.status))}`}>{String(shipment.status)}</span>
+          <div className="shipmentStats"><span>Expected {Number(shipment.expected_units)}</span><span>Received {Number(shipment.received_units)}</span><span>Damaged {Number(shipment.damaged_units)}</span><span>Still expected {Number(shipment.remaining_expected_units)}</span><span>Stowed {Number(shipment.stowed_units)} / {Number(shipment.received_units)}</span></div>
+          <p>Receipt {Number(shipment.receive_percent)}% · Putaway {Number(shipment.stow_percent)}%</p>
+          <details><summary>Item discrepancies and putaway</summary>
+            <ul>{(shipment.lines || []).map((line: Record<string, any>) => <li key={String(line.id)}>
+              {String(line.product_id)}: expected {Number(line.expected_qty)}, received {Number(line.received_qty)}, damaged {Number(line.damaged_qty)}, missing {Number(line.remaining_expected_qty)}
+              {line.discrepancy_reason && ` · extra/unplanned: ${String(line.discrepancy_reason)}`}
+            </li>)}</ul>
+          </details>
+          {shipment.status === "RECEIVING" && <button type="button" disabled={busy} onClick={() => void closeReceiving(shipment)}>{closingShipmentId === shipment.id ? "Closing…" : "Close receiving and record missing"}</button>}
+          {shipment.stow_overdue && <p className="blockReason">Stow target exceeded · {Number(shipment.elapsed_minutes)}m / {Number(shipment.target_stow_minutes)}m</p>}
+        </article>)}</div>
       </section>
     </main>
   );

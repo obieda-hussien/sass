@@ -6,9 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import (
-    AuditLog, CycleCountEntry, CycleCountSession, InventoryBalance, Location, Product,
-    UnpackEntry, UnpackSession,
+    AuditLog, CycleCountEntry, CycleCountSession, InventoryBalance, Location, Order, OrderLine, Product,
+    UnpackEntry, UnpackManifestLine, UnpackSession,
 )
+from ..models_ops import OrderBag
 from .compatibility import storage_compatible
 from .inventory import InventoryError, get_balance, move_inventory
 from .ops_platform import OpsError, set_worker_state
@@ -36,7 +37,15 @@ def audit(db: Session, event_type: str, entity_type: str, entity_id: str, *, use
     ))
 
 
-def start_unpack(db: Session, temperature_class: str, user_id: str, device_id: str) -> UnpackSession:
+def start_unpack(
+    db: Session,
+    temperature_class: str,
+    user_id: str,
+    device_id: str,
+    *,
+    source_ref: str | None = None,
+    expected_items: list[dict] | None = None,
+) -> UnpackSession:
     temp = temperature_class.upper()
     tote = UNPACK_TOTES.get(temp)
     if not tote:
@@ -58,9 +67,18 @@ def start_unpack(db: Session, temperature_class: str, user_id: str, device_id: s
         .order_by(UnpackSession.created_at.desc())
     )
     if existing:
+        if expected_items and not existing.manifest_locked:
+            set_unpack_manifest(db, existing, expected_items, source_ref=source_ref or "EXPLICIT")
+        elif source_ref and not existing.manifest_locked:
+            bind_unpack_source(db, existing, source_ref)
         return existing
 
-    session = UnpackSession(temperature_class=temp, tote_location_id=tote, user_id=user_id, device_id=device_id)
+    session = UnpackSession(
+        temperature_class=temp,
+        tote_location_id=tote,
+        user_id=user_id,
+        device_id=device_id,
+    )
     db.add(session)
     db.flush()
     try:
@@ -68,6 +86,123 @@ def start_unpack(db: Session, temperature_class: str, user_id: str, device_id: s
     except OpsError as exc:
         raise OperationError(str(exc), exc.code) from exc
     audit(db, "UNPACK_STARTED", "UNPACK_SESSION", session.id, user_id=user_id, device_id=device_id, payload={"tote": tote, "temperature": temp})
+    if expected_items:
+        set_unpack_manifest(db, session, expected_items, source_ref=source_ref or "EXPLICIT")
+    elif source_ref:
+        bind_unpack_source(db, session, source_ref)
+    return session
+
+
+def set_unpack_manifest(
+    db: Session,
+    session: UnpackSession,
+    expected_items: list[dict],
+    *,
+    source_ref: str,
+) -> UnpackSession:
+    if session.status != "OPEN":
+        raise OperationError("Unpack session is closed", "SESSION_CLOSED")
+    if session.manifest_locked:
+        if (session.source_ref or "") == source_ref.strip():
+            return session
+        raise OperationError("Unpack manifest is already locked to another source", "MANIFEST_ALREADY_BOUND")
+    existing_scan = db.scalar(select(UnpackEntry.id).where(UnpackEntry.session_id == session.id).limit(1))
+    if existing_scan is not None:
+        raise OperationError("Bind the expected manifest before scanning items", "MANIFEST_BIND_TOO_LATE")
+
+    grouped: dict[str, int] = {}
+    for item in expected_items:
+        product_id = str(item["product_id"])
+        qty = int(item["expected_qty"])
+        if qty <= 0:
+            raise OperationError("Expected quantities must be positive", "BAD_EXPECTED_QTY")
+        product = db.get(Product, product_id)
+        if product is None:
+            raise OperationError(f"Unknown manifest product {product_id}", "PRODUCT_NOT_FOUND")
+        if product.temperature_class != session.temperature_class:
+            raise OperationError(
+                f"{product.title} is {product.temperature_class}, not {session.temperature_class}",
+                "TEMPERATURE_MISMATCH",
+            )
+        grouped[product_id] = grouped.get(product_id, 0) + qty
+
+    if not grouped:
+        raise OperationError("Expected manifest cannot be empty", "EMPTY_MANIFEST")
+
+    for product_id, qty in grouped.items():
+        db.add(UnpackManifestLine(session_id=session.id, product_id=product_id, expected_qty=qty))
+    session.source_ref = source_ref.strip()
+    session.expected_units = sum(grouped.values())
+    session.manifest_locked = True
+    db.flush()
+    audit(
+        db,
+        "UNPACK_MANIFEST_BOUND",
+        "UNPACK_SESSION",
+        session.id,
+        user_id=session.user_id,
+        device_id=session.device_id,
+        payload={"source_ref": session.source_ref, "expected_units": session.expected_units},
+    )
+    return session
+
+
+def bind_unpack_source(db: Session, session: UnpackSession, source_ref: str) -> UnpackSession:
+    ref = source_ref.strip()
+    if not ref:
+        raise OperationError("Source reference is required", "SOURCE_REQUIRED")
+
+    order: Order | None = None
+    if ref.upper().startswith("ORDER:"):
+        key = ref.split(":", 1)[1].strip()
+        order = db.get(Order, key)
+        if order is None:
+            order = db.scalar(select(Order).where(Order.external_ref == key))
+    else:
+        bag = db.scalar(select(OrderBag).where(OrderBag.spoo_code == ref))
+        if bag is None:
+            bag = db.scalar(select(OrderBag).where(OrderBag.spoo_code == ref.upper()))
+        if bag is not None:
+            order = db.get(Order, bag.order_id)
+
+    if order is None:
+        raise OperationError("No trusted manifest found for this bag/order reference", "UNPACK_SOURCE_NOT_FOUND")
+
+    # A SPOO identifies the order, not the contents of one physical bag. One
+    # scan loads all picked units for this temperature; every other SPOO of the
+    # same order must resolve to the same workflow and cannot be unpacked twice.
+    previous = db.scalar(select(UnpackSession).where(
+        UnpackSession.source_order_id == order.id,
+        UnpackSession.temperature_class == session.temperature_class,
+        UnpackSession.id != session.id,
+    ))
+    if previous:
+        raise OperationError(
+            "This order is already being unpacked or has been completed",
+            "ORDER_ALREADY_UNPACKED",
+        )
+    if session.manifest_locked:
+        if session.source_order_id == order.id:
+            return session
+        raise OperationError("Unpack manifest is already locked to another order", "MANIFEST_ALREADY_BOUND")
+
+    lines = db.scalars(select(OrderLine).where(OrderLine.order_id == order.id)).all()
+    expected: list[dict] = []
+    for line in lines:
+        product = db.get(Product, line.product_id)
+        if product is None or product.temperature_class != session.temperature_class:
+            continue
+        qty = max(0, int(line.picked_qty))
+        if qty > 0:
+            expected.append({"product_id": line.product_id, "expected_qty": qty})
+    if not expected:
+        raise OperationError(
+            "The source has no picked items for this temperature class",
+            "EMPTY_MANIFEST",
+        )
+    set_unpack_manifest(db, session, expected, source_ref=f"ORDER:{order.id}")
+    session.source_order_id = order.id
+    db.flush()
     return session
 
 
@@ -92,6 +227,30 @@ def scan_unpack(db: Session, session: UnpackSession, event_id: str, product_id: 
         return {"duplicate": True, "entry_id": existing.id, "tote_location_id": session.tote_location_id}
     if session.status != "OPEN":
         raise OperationError("Unpack session is not open", "SESSION_CLOSED")
+    if not session.manifest_locked:
+        raise OperationError("Scan the bag/source manifest before unpacking items", "UNPACK_MANIFEST_REQUIRED")
+    manifest_line = db.scalar(
+        select(UnpackManifestLine).where(
+            UnpackManifestLine.session_id == session.id,
+            UnpackManifestLine.product_id == product_id,
+        )
+    )
+    if manifest_line is None:
+        raise OperationError("Scanned item is not expected in this bag/manifest", "UNEXPECTED_UNPACK_ITEM")
+    verified_before = sum(
+        row.qty
+        for row in db.scalars(
+            select(UnpackEntry).where(
+                UnpackEntry.session_id == session.id,
+                UnpackEntry.product_id == product_id,
+            )
+        ).all()
+    )
+    if verified_before + qty > manifest_line.expected_qty:
+        raise OperationError(
+            f"Scan would exceed expected quantity {manifest_line.expected_qty}",
+            "UNPACK_OVERAGE",
+        )
     product = db.get(Product, product_id)
     if not product:
         raise OperationError("Unknown product", "PRODUCT_NOT_FOUND")
@@ -124,11 +283,36 @@ def unpack_summary(db: Session, session: UnpackSession) -> dict:
         locations = db.scalars(select(Location).where(Location.logical == False, Location.stowable == True)).all()  # noqa: E712
         compatible = [loc.id for loc in locations if storage_compatible(product, loc)[0]]
         recommendations.append({"product_id": product_id, "qty": qty, "compatible_destinations": compatible[:10]})
+    manifest_rows = db.scalars(
+        select(UnpackManifestLine).where(UnpackManifestLine.session_id == session.id)
+    ).all()
+    manifest = []
+    verified_units = 0
+    for row in manifest_rows:
+        verified = grouped.get(row.product_id, 0)
+        verified_units += verified
+        product = db.get(Product, row.product_id)
+        manifest.append({
+            "product_id": row.product_id,
+            "asin": product.asin if product else None,
+            "title": product.title if product else "Unknown product",
+            "expected_qty": row.expected_qty,
+            "verified_qty": verified,
+            "missing_qty": max(0, row.expected_qty - verified),
+        })
+    remaining_units = max(0, session.expected_units - verified_units)
     return {
         "session_id": session.id,
         "status": session.status,
         "temperature_class": session.temperature_class,
         "tote_location_id": session.tote_location_id,
+        "source_ref": session.source_ref,
+        "manifest_locked": bool(session.manifest_locked),
+        "expected_units": int(session.expected_units),
+        "verified_units": verified_units,
+        "remaining_units": remaining_units,
+        "complete_ready": bool(session.manifest_locked and session.expected_units > 0 and remaining_units == 0),
+        "manifest": manifest,
         "items": recommendations,
     }
 
@@ -136,6 +320,19 @@ def unpack_summary(db: Session, session: UnpackSession) -> dict:
 def complete_unpack(db: Session, session: UnpackSession) -> dict:
     if session.status != "OPEN":
         return unpack_summary(db, session)
+    summary = unpack_summary(db, session)
+    if not session.manifest_locked:
+        raise OperationError("A trusted expected manifest is required before completion", "UNPACK_MANIFEST_REQUIRED")
+    if not summary["complete_ready"]:
+        missing = [
+            f'{row["title"]} x{row["missing_qty"]}'
+            for row in summary["manifest"]
+            if row["missing_qty"] > 0
+        ]
+        raise OperationError(
+            "Unpack is incomplete. Missing: " + ", ".join(missing[:8]),
+            "UNPACK_INCOMPLETE",
+        )
     session.status = "COMPLETED"
     session.completed_at = datetime.now(timezone.utc)
     try:

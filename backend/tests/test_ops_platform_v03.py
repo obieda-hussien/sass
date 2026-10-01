@@ -8,6 +8,7 @@ from app.models_ops import InventoryAlert, ReplenishmentTask, StowTask
 from app.services.allocation import allocate_order
 from app.services.ops_platform import (
     OpsError,
+    adhoc_stow_shipment_item,
     broadcast_task,
     claim_task,
     clock_in_shift,
@@ -246,6 +247,8 @@ def test_receiving_and_stow_are_exclusive_operational_states(db):
             shipment=shipment,
             user_id=picker.id,
             device_id="PDA-DEMO-001",
+            storage_domain="CHILLED",
+            opening_temperature_c=3.4,
         )
         assert get_worker_state(db, picker.id).state == "RECEIVING_CHILLED"
 
@@ -275,6 +278,86 @@ def test_receiving_and_stow_are_exclusive_operational_states(db):
         )
         assert completed["shipment_completed"] is True
         assert get_worker_state(db, picker.id).state == "AVAILABLE"
+
+
+def test_partial_receipt_and_unplanned_item_are_reported_separately(db):
+    with db.begin():
+        picker = _user(db, "picker1")
+        expected = _product(db, "DEMO-AMBIENT-001")
+        extra = _product(db, "DEMO-CHIPS-001")
+        set_worker_state(db, picker.id, "AVAILABLE", force=True)
+        shipment = create_shipment(db, label="SHIP-PARTIAL-001", shipment_type="VENDOR",
+                                   storage_domain="AMBIENT",
+                                   lines=[{"product_id": expected.id, "expected_qty": 5}],
+                                   created_by_user_id=_user(db, "supervisor").id)
+        with pytest.raises(OpsError) as error:
+            open_shipment_receiving(db, shipment=shipment, user_id=picker.id,
+                                    device_id="PDA-DEMO-001", storage_domain="FROZEN",
+                                    opening_temperature_c=20)
+        assert error.value.code == "ZONE_MISMATCH"
+        session = open_shipment_receiving(db, shipment=shipment, user_id=picker.id,
+                                          device_id="PDA-DEMO-001", storage_domain="AMBIENT",
+                                          opening_temperature_c=20)
+        receive_shipment_line(db, shipment=shipment, session=session, event_id="partial-4",
+                              product_id=expected.id, good_qty=4)
+        replay = receive_shipment_line(db, shipment=shipment, session=session, event_id="partial-4",
+                                       product_id=expected.id, good_qty=4)
+        assert replay["duplicate"] is True
+        assert replay["received_good"] == 4
+        with pytest.raises(OpsError) as error:
+            receive_shipment_line(db, shipment=shipment, session=session, event_id="unexpected-no-reason",
+                                  product_id=extra.id, good_qty=2)
+        assert error.value.code == "DISCREPANCY_REASON_REQUIRED"
+        with pytest.raises(OpsError) as error:
+            receive_shipment_line(db, shipment=shipment, session=session, event_id="wrong-zone",
+                                  product_id=_product(db, "DEMO-CHILLED-001").id, good_qty=1,
+                                  discrepancy_reason="Wrong shipment")
+        assert error.value.code == "TEMPERATURE_MISMATCH"
+        receive_shipment_line(db, shipment=shipment, session=session, event_id="unexpected-2",
+                              product_id=extra.id, good_qty=2,
+                              discrepancy_reason="Extra stock delivered by supplier")
+        result = complete_receiving(db, shipment, session)
+        assert receive_shipment_line(db, shipment=shipment, session=session,
+                                     event_id="partial-4", product_id=expected.id,
+                                     good_qty=4)["duplicate"] is True
+        assert result["receive_percent"] == 80
+        assert result["remaining_expected_units"] == 1
+        assert result["missing_units"] == 1
+        assert result["received_units"] == 6
+        assert result["opening_temperature_c"] == 20
+        assert len(result["stow_tasks"]) == 2
+        assert any(line["discrepancy_reason"] for line in result["lines"])
+
+
+def test_adhoc_item_scans_directly_to_compatible_bin_once(db):
+    with db.begin():
+        picker = _user(db, "picker1")
+        product = _product(db, "DEMO-CHIPS-001")
+        chilled = _product(db, "DEMO-CHILLED-001")
+        set_worker_state(db, picker.id, "AVAILABLE", force=True)
+        shipment = create_shipment(db, label="SHIP-ADHOC-001", shipment_type="VENDOR",
+                                   storage_domain="AMBIENT", lines=[],
+                                   created_by_user_id=_user(db, "supervisor").id)
+        session = open_shipment_receiving(db, shipment=shipment, user_id=picker.id,
+                                          device_id="PDA-DEMO-001", storage_domain="AMBIENT",
+                                          opening_temperature_c=21)
+        args = dict(shipment=shipment, session=session, event_id="adhoc-1",
+                    product_id=product.id, destination_location_id="P-1-R120D211",
+                    qty=2, expires_on=None, lot_code="EXTRA-1", reason="Supplier over-delivery")
+        with pytest.raises(OpsError) as error:
+            adhoc_stow_shipment_item(db, **(args | {"destination_location_id": "P-1-C124A110"}))
+        assert error.value.code == "TEMPERATURE_MISMATCH"
+        with pytest.raises(OpsError) as error:
+            adhoc_stow_shipment_item(db, **(args | {"product_id": chilled.id}))
+        assert error.value.code == "ZONE_MISMATCH"
+        result = adhoc_stow_shipment_item(db, **args)
+        assert result["shipment"]["stowed_units"] == 2
+        assert adhoc_stow_shipment_item(db, **args)["duplicate"] is True
+        final = complete_receiving(db, shipment, session)
+        assert final["received_units"] == 2
+        assert final["stowed_units"] == 2
+        assert final["status"] == "COMPLETED"
+        assert final["stow_tasks"] == []
 
 
 def test_shift_clock_calculates_late_overtime_and_payroll_inputs(db):

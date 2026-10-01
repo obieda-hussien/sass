@@ -67,6 +67,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     var screen by mutableStateOf(AppScreen.HOME)
         private set
+    var workerState by mutableStateOf("AVAILABLE")
+        private set
+    var activityReasonInput by mutableStateOf("")
     var currentTask by mutableStateOf<TaskSnapshot?>(null)
         private set
     var scanPhase by mutableStateOf(PickScanPhase.BIN)
@@ -90,6 +93,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     var operationProduct by mutableStateOf<BarcodeProduct?>(null)
         private set
     var operationScanPhase by mutableStateOf(OperationScanPhase.SOURCE)
+        private set
+    var operationAwaitingConfirmation by mutableStateOf(false)
         private set
 
     var unpackTemperature by mutableStateOf("AMBIENT")
@@ -119,6 +124,13 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     var receiveDamagedQtyInput by mutableStateOf("0")
     var receiveLotInput by mutableStateOf("")
     var receiveExpiryInput by mutableStateOf("")
+    var receiveTemperatureInput by mutableStateOf("")
+    var receiveZoneInput by mutableStateOf("")
+    var receiveDiscrepancyInput by mutableStateOf("")
+    var receiveAdhocMode by mutableStateOf(false)
+    var receiveAdhocDestination by mutableStateOf("")
+    var receivePlacementHint by mutableStateOf("")
+        private set
     var selectedStowTaskId by mutableStateOf<String?>(null)
         private set
     var stowDestinationInput by mutableStateOf("")
@@ -145,7 +157,17 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     private val offerPollRunnable = object : Runnable {
         override fun run() {
-            if (appForeground && authenticated && session?.mustChangePassword != true && connectivity == ConnectivityState.ONLINE && !busy) {
+            val waitingSurface = screen == AppScreen.HOME || screen == AppScreen.PICK
+            val eligibleLocalState = currentTask != null || workerState == "AVAILABLE"
+            if (
+                appForeground &&
+                authenticated &&
+                session?.mustChangePassword != true &&
+                connectivity == ConnectivityState.ONLINE &&
+                !busy &&
+                waitingSurface &&
+                eligibleLocalState
+            ) {
                 pollWaitingOrders()
             }
             main.postDelayed(this, offerPollIntervalMs)
@@ -179,15 +201,19 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         worker.execute {
             val recovered = graph.sessions.recoverBlocking().getOrNull()
             var task: TaskSnapshot? = null
+            var recoveredWorkerState = "AVAILABLE"
             if (recovered != null && !recovered.mustChangePassword) {
                 val response = callWithRefresh { graph.api.getActiveTask() }
                 if (response.ok) task = runCatching { graph.api.parseTaskEnvelope(response.body) }.getOrNull()
+                val stateResponse = callWithRefresh { graph.api.getWorkerState() }
+                if (stateResponse.ok) recoveredWorkerState = graph.api.parseWorkerState(stateResponse.body)
             }
             ui {
                 session = recovered
                 authenticated = recovered != null
                 booting = false
                 busy = false
+                workerState = recoveredWorkerState
                 if (recovered == null) {
                     message = "Sign in to this trusted PDA"
                 } else {
@@ -236,12 +262,21 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 else -> Unit
             }
             AppScreen.INVENTORY -> requestCameraScan("Scan a bin or item barcode")
-            AppScreen.UNPACK -> if (unpackSummary?.status == "OPEN") requestCameraScan("Scan unpack item barcode")
-            AppScreen.BOH -> when (operationScanPhase) {
-                OperationScanPhase.SOURCE -> requestCameraScan("Scan source bin")
-                OperationScanPhase.ITEM -> requestCameraScan("Scan item barcode")
-                OperationScanPhase.DESTINATION -> requestCameraScan("Scan destination bin")
-                OperationScanPhase.SYNCING -> Unit
+            AppScreen.UNPACK -> unpackSummary?.let { unpack ->
+                when {
+                    unpack.status != "OPEN" -> Unit
+                    !unpack.manifestLocked -> requestCameraScan("Scan return bag / SPOO")
+                    !unpack.completeReady -> requestCameraScan("Scan unpack item barcode")
+                    else -> Unit
+                }
+            }
+            AppScreen.BOH -> if (!operationAwaitingConfirmation) {
+                when (operationScanPhase) {
+                    OperationScanPhase.SOURCE -> requestCameraScan("Scan source bin")
+                    OperationScanPhase.ITEM -> requestCameraScan("Scan item barcode")
+                    OperationScanPhase.DESTINATION -> requestCameraScan("Scan destination bin")
+                    OperationScanPhase.SYNCING -> Unit
+                }
             }
             AppScreen.DAMAGE -> when (operationScanPhase) {
                 OperationScanPhase.SOURCE -> requestCameraScan("Scan source bin")
@@ -262,6 +297,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 selectedShipment == null -> requestCameraScan("Scan shipment label or ID")
                 selectedShipment?.status == "RECEIVING" && receiveProduct == null ->
                     requestCameraScan("Scan received product barcode")
+                selectedShipment?.status == "RECEIVING" && receiveAdhocMode && receiveAdhocDestination.isBlank() ->
+                    requestCameraScan("Scan ad hoc destination bin")
                 selectedShipment?.status == "STOWING" || selectedStowTaskId != null ->
                     requestCameraScan("Scan stow destination bin")
                 else -> Unit
@@ -272,12 +309,13 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 ReplenishmentScanPhase.DESTINATION -> if (activeReplenishment != null) requestCameraScan("Scan replenishment destination")
                 ReplenishmentScanPhase.COMPLETE -> Unit
             }
-            AppScreen.HOME -> Unit
+            AppScreen.HOME, AppScreen.ACTIVITY -> Unit
         }
     }
 
     private fun currentPresenceActivity(): String = when {
         currentTask != null -> "ORDER_" + (currentTask?.taskStatus ?: "ACTIVE")
+        workerState != "AVAILABLE" && workerState != "OFFLINE" -> workerState
         screen == AppScreen.INVENTORY -> "INVENTORY_VIEW"
         screen == AppScreen.UNPACK -> "UNPACK"
         screen == AppScreen.BOH -> "BOH_MOVE"
@@ -286,7 +324,109 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         screen == AppScreen.RECOVERY -> "RECOVERY"
         screen == AppScreen.RECEIVE -> "RECEIVE"
         screen == AppScreen.REPLENISHMENT -> "REPLENISHMENT"
+        screen == AppScreen.ACTIVITY -> "ACTIVITY_RECORDER"
         else -> "WAITING_FOR_ORDER"
+    }
+
+    fun openActivityRecorder() {
+        screen = AppScreen.ACTIVITY
+        refreshWorkerState()
+    }
+
+    fun refreshWorkerState() {
+        if (!authenticated || busy) return
+        worker.execute {
+            val response = callWithRefresh { graph.api.getWorkerState() }
+            ui {
+                if (response.ok) {
+                    workerState = graph.api.parseWorkerState(response.body)
+                    message = "Current activity • " + workerState.replace("_", " ")
+                } else if (response.code != 401) {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun startBreak(breakType: String = "REST") {
+        if (!authenticated || busy || currentTask != null) {
+            if (currentTask != null) errorMessage = "Finish or hand over the active order before break"
+            return
+        }
+        busy = true
+        errorMessage = null
+        message = "Starting break…"
+        worker.execute {
+            val response = callWithRefresh { graph.api.startBreak(breakType = breakType, paid = true) }
+            ui {
+                busy = false
+                if (response.ok) {
+                    workerState = "BREAK"
+                    message = "Break recorded • order dispatch blocked"
+                    sendHeartbeat(forceConnectivity = "ONLINE", activityOverride = "BREAK")
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                    message = "Break was not started"
+                }
+            }
+        }
+    }
+
+    fun finishRecordedActivity() {
+        if (!authenticated || busy || currentTask != null) return
+        val manualStates = setOf(
+            "BREAK", "TRAINING", "BIN_CHECK", "EXPIRY_AUDIT",
+            "VENDOR_REMOVAL", "BOH_MOVE", "ENDING_SHIFT",
+        )
+        if (workerState !in manualStates) {
+            errorMessage = "Finish this activity from its operational workflow so the task/session closes correctly"
+            return
+        }
+        busy = true
+        errorMessage = null
+        val endingBreak = workerState == "BREAK"
+        message = if (endingBreak) "Ending break…" else "Returning available…"
+        worker.execute {
+            val response = callWithRefresh {
+                if (endingBreak) graph.api.endBreak()
+                else graph.api.updateWorkerState("AVAILABLE", "ACTIVITY_COMPLETED")
+            }
+            ui {
+                busy = false
+                if (response.ok) {
+                    workerState = "AVAILABLE"
+                    activityReasonInput = ""
+                    message = "Available • waiting for orders"
+                    sendHeartbeat(forceConnectivity = "ONLINE", activityOverride = "WAITING_FOR_ORDER")
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun recordActivity(state: String, defaultReason: String) {
+        if (!authenticated || busy || currentTask != null) {
+            if (currentTask != null) errorMessage = "An active order blocks other recorded tasks"
+            return
+        }
+        val reason = activityReasonInput.trim().ifBlank { defaultReason }
+        busy = true
+        errorMessage = null
+        message = "Recording " + state.replace("_", " ").lowercase() + "…"
+        worker.execute {
+            val response = callWithRefresh { graph.api.updateWorkerState(state, reason) }
+            ui {
+                busy = false
+                if (response.ok) {
+                    workerState = graph.api.parseWorkerState(response.body)
+                    message = workerState.replace("_", " ") + " recorded • order dispatch blocked"
+                    sendHeartbeat(forceConnectivity = "ONLINE", activityOverride = workerState)
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
     }
 
     fun forgotPassword() {
@@ -322,9 +462,12 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             val result = graph.sessions.loginBlocking(usernameInput, passwordInput)
             val loggedIn = result.getOrNull()
             var task: TaskSnapshot? = null
+            var loggedInWorkerState = "AVAILABLE"
             if (loggedIn != null && !loggedIn.mustChangePassword) {
                 val active = graph.api.getActiveTask()
                 if (active.ok) task = runCatching { graph.api.parseTaskEnvelope(active.body) }.getOrNull()
+                val stateResponse = graph.api.getWorkerState()
+                if (stateResponse.ok) loggedInWorkerState = graph.api.parseWorkerState(stateResponse.body)
             }
             ui {
                 busy = false
@@ -334,6 +477,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 } else {
                     session = loggedIn
                     authenticated = true
+                    workerState = loggedInWorkerState
                     passwordInput = ""
                     message = when {
                         loggedIn.mustChangePassword -> "Temporary PIN accepted • create your personal PIN"
@@ -694,6 +838,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     scannedValue = ""
                     scanPhase = PickScanPhase.BIN
                     screen = AppScreen.PICK
+                    workerState = "AVAILABLE"
                     message = "Order complete"
                 } else if (response.code == 401) {
                     expireSession()
@@ -776,8 +921,12 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 busy = false
                 if (summary != null) {
                     unpackSummary = summary
-                    message = "Unpack ${summary.toteLocationId} • scan item barcode"
-                    requestCameraScan("Scan unpack item barcode")
+                    message = when {
+                        !summary.manifestLocked -> "Unpack ${summary.toteLocationId} • scan return bag / SPOO"
+                        summary.completeReady -> "All ${summary.expectedUnits} units verified • ready to finish"
+                        else -> "Unpack ${summary.toteLocationId} • ${summary.verifiedUnits}/${summary.expectedUnits} verified"
+                    }
+                    requestCameraForCurrentContext()
                 } else if (response.code == 401) {
                     expireSession()
                 } else {
@@ -799,7 +948,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 busy = false
                 if (updated != null) {
                     unpackSummary = updated
-                    message = "Unpack completed"
+                    workerState = "AVAILABLE"
+                    message = "Unpack completed • manifest verified"
+                    sendHeartbeat(forceConnectivity = "ONLINE", activityOverride = "WAITING_FOR_ORDER")
                 } else {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
@@ -933,6 +1084,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         receiveProduct = null
         selectedStowTaskId = null
         stowDestinationInput = ""
+        receiveAdhocDestination = ""
+        receivePlacementHint = ""
         errorMessage = null
         loadShipments()
     }
@@ -992,13 +1145,29 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     fun selectShipment(shipment: ShipmentSummary) {
         if (busy) return
         selectedShipment = shipment
+        receiveZoneInput = shipment.storageDomain
         receiveProduct = null
         selectedStowTaskId = null
         stowDestinationInput = ""
+        if (shipment.status == "CREATED" || shipment.status == "DOCKED") {
+            message = "Confirm ${shipment.storageDomain} zone and enter current temperature to open"
+            return
+        }
+        message = "${shipment.label} • ${shipment.status}"
+        requestCameraForCurrentContext()
+    }
+
+    fun openSelectedShipment() {
+        val shipment = selectedShipment ?: return
+        val temperature = receiveTemperatureInput.trim().toDoubleOrNull()
+        if (temperature == null) {
+            errorMessage = "Enter the measured temperature in °C"
+            return
+        }
         busy = true
         message = "Opening ${shipment.label}…"
         worker.execute {
-            val response = callWithRefresh { graph.api.openShipment(shipment.id) }
+            val response = callWithRefresh { graph.api.openShipment(shipment.id, receiveZoneInput, temperature) }
             val updated = if (response.ok) runCatching {
                 val root = org.json.JSONObject(response.body)
                 graph.api.parseShipment(root.getJSONObject("shipment").toString())
@@ -1040,6 +1209,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     damagedQty = damaged,
                     lotCode = receiveLotInput.trim().ifBlank { null },
                     expiresOn = receiveExpiryInput.trim().ifBlank { null },
+                    discrepancyReason = receiveDiscrepancyInput.trim().ifBlank { null },
                 )
             }
             ui {
@@ -1048,6 +1218,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     receiveProduct = null
                     receiveGoodQtyInput = "1"
                     receiveDamagedQtyInput = "0"
+                    receiveDiscrepancyInput = ""
                     message = "Receipt saved • scan next item"
                     refreshSelectedShipment()
                     requestCameraScan("Scan next received product barcode")
@@ -1055,6 +1226,74 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     errorMessage = graph.api.parseConflictMessage(response.body)
                 }
             }
+        }
+    }
+
+    fun submitAdhocStow() {
+        val shipment = selectedShipment ?: return
+        val product = receiveProduct ?: return
+        val qty = receiveGoodQtyInput.toIntOrNull() ?: 0
+        val destination = receiveAdhocDestination.trim().uppercase()
+        val reason = receiveDiscrepancyInput.trim()
+        if (busy) return
+        if (qty <= 0 || destination.isBlank() || reason.length < 3) {
+            errorMessage = "Scan item and destination, then enter quantity and a reason"
+            return
+        }
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.adhocStowShipmentItem(
+                shipment.id, UUID.randomUUID().toString(), product.productId,
+                destination, qty, receiveExpiryInput.trim().ifBlank { null },
+                receiveLotInput.trim().ifBlank { null }, reason,
+            ) }
+            ui {
+                busy = false
+                if (response.ok) {
+                    receiveProduct = null
+                    receiveAdhocDestination = ""
+                    receiveGoodQtyInput = "1"
+                    receiveDiscrepancyInput = ""
+                    message = "Ad hoc stock stowed in $destination • scan next item"
+                    refreshSelectedShipment()
+                    requestCameraScan("Scan next received product barcode")
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                }
+            }
+        }
+    }
+
+    fun chooseReceiveAdhocMode(enabled: Boolean) {
+        receiveAdhocMode = enabled
+        receiveProduct = null
+        receiveAdhocDestination = ""
+        receivePlacementHint = ""
+        requestCameraScan("Scan received product barcode")
+    }
+
+    fun checkAdhocPlacement() {
+        val shipment = selectedShipment ?: return
+        val product = receiveProduct ?: return
+        val destination = receiveAdhocDestination.trim().uppercase()
+        if (destination.isBlank()) return
+        worker.execute {
+            val response = callWithRefresh {
+                graph.api.getShipmentPlacement(shipment.id, product.productId, destination)
+            }
+            val hint = if (response.ok) runCatching {
+                val data = org.json.JSONObject(response.body)
+                val suggestions = data.optJSONArray("recommended_bins")
+                val bins = (0 until (suggestions?.length() ?: 0)).take(3).map { index ->
+                    suggestions!!.getJSONObject(index).getString("location_id")
+                }
+                if (data.optBoolean("destination_compatible")) {
+                    "✓ ${data.optString("destination_zone")} zone matches this item"
+                } else {
+                    "Wrong bin (${data.optString("reason_code")}). Suggested: ${bins.joinToString()}"
+                }
+            }.getOrNull() else null
+            ui { receivePlacementHint = hint ?: graph.api.parseConflictMessage(response.body) }
         }
     }
 
@@ -1203,6 +1442,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         operationProduct = null
         operationQtyInput = "1"
         operationScanPhase = OperationScanPhase.SOURCE
+        operationAwaitingConfirmation = false
     }
 
     private fun resolveBarcode(
@@ -1275,6 +1515,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             AppScreen.RECOVERY -> handleRecoveryScan(value)
             AppScreen.RECEIVE -> handleReceiveScan(value)
             AppScreen.REPLENISHMENT -> handleReplenishmentScan(value)
+            AppScreen.ACTIVITY -> message = "Scan ignored • Record Task uses buttons, not barcode scans"
             AppScreen.HOME -> message = "Scan received • open a tool to use it"
         }
     }
@@ -1288,38 +1529,95 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             message = "Start a new unpack session first"
             return
         }
+        if (!unpack.manifestLocked) {
+            bindCurrentUnpackSource(value)
+            return
+        }
+        if (unpack.completeReady) {
+            message = "Manifest already complete • finish unpack"
+            return
+        }
         resolveBarcode(value) { product ->
             operationProduct = product
             graph.operations.enqueue(
                 kind = PendingOperationEvent.Kind.UNPACK_SCAN,
                 resourceId = unpack.sessionId,
                 productId = product.productId,
-                qty = operationQtyInput.toIntOrNull()?.coerceAtLeast(1) ?: 1,
+                qty = 1,
                 onResult = ::handleOperationSync,
             )
-            message = "Unpack scan persisted • awaiting ACK"
+            message = "1 unit recorded • reconciling manifest"
+        }
+    }
+
+    private fun bindCurrentUnpackSource(sourceRef: String) {
+        val unpack = unpackSummary ?: return
+        if (busy) return
+        busy = true
+        message = "Loading expected bag contents…"
+        worker.execute {
+            val response = callWithRefresh { graph.api.bindUnpackSource(unpack.sessionId, sourceRef) }
+            val updated = if (response.ok) runCatching { graph.api.parseUnpack(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (updated != null) {
+                    unpackSummary = updated
+                    message = "Manifest loaded • ${updated.expectedUnits} units expected"
+                    requestCameraForCurrentContext()
+                } else {
+                    errorMessage = graph.api.parseConflictMessage(response.body)
+                    message = "Could not verify bag manifest"
+                }
+            }
         }
     }
 
     private fun handleBohScan(value: String) {
+        if (operationAwaitingConfirmation) {
+            message = "Confirm ✓ or rescan before continuing"
+            return
+        }
         when (operationScanPhase) {
             OperationScanPhase.SOURCE -> {
                 operationSourceInput = canonicalLocation(value)
                 lastLocationId = operationSourceInput
-                operationScanPhase = OperationScanPhase.ITEM
-                message = "Source ${operationSourceInput} • scan item"
-                requestCameraScan("Scan item barcode")
+                operationAwaitingConfirmation = true
+                message = "Check source ${operationSourceInput} • tap ✓"
             }
             OperationScanPhase.ITEM -> resolveBarcode(value) { product ->
                 operationProduct = product
+                operationAwaitingConfirmation = true
+                message = "Check ${product.title} • tap ✓"
+            }
+            OperationScanPhase.DESTINATION -> {
+                operationDestinationInput = canonicalLocation(value)
+                operationAwaitingConfirmation = true
+                message = "Check destination ${operationDestinationInput} • tap ✓"
+            }
+            OperationScanPhase.SYNCING -> message = "Waiting for server confirmation"
+        }
+    }
+
+    fun confirmBohStep() {
+        if (!operationAwaitingConfirmation || busy) return
+        when (operationScanPhase) {
+            OperationScanPhase.SOURCE -> {
+                operationAwaitingConfirmation = false
+                operationScanPhase = OperationScanPhase.ITEM
+                message = "Source confirmed • scan item"
+                requestCameraScan("Scan item barcode")
+            }
+            OperationScanPhase.ITEM -> {
+                if (operationProduct == null) return
+                operationAwaitingConfirmation = false
                 operationScanPhase = OperationScanPhase.DESTINATION
-                message = "${product.title} • scan destination bin"
+                message = "Item confirmed • scan new bin"
                 requestCameraScan("Scan destination bin")
             }
             OperationScanPhase.DESTINATION -> {
                 val product = operationProduct ?: return
-                operationDestinationInput = canonicalLocation(value)
                 val qty = operationQtyInput.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                operationAwaitingConfirmation = false
                 operationScanPhase = OperationScanPhase.SYNCING
                 graph.operations.enqueue(
                     kind = PendingOperationEvent.Kind.BOH_MOVE,
@@ -1329,10 +1627,28 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     destinationLocationId = operationDestinationInput,
                     onResult = ::handleOperationSync,
                 )
-                message = "BOH move persisted • awaiting ACK"
+                message = "Move submitted • waiting for server ✓"
             }
-            OperationScanPhase.SYNCING -> message = "Waiting for server confirmation"
+            OperationScanPhase.SYNCING -> Unit
         }
+    }
+
+    fun rescanBohStep() {
+        if (busy || operationScanPhase == OperationScanPhase.SYNCING) return
+        when (operationScanPhase) {
+            OperationScanPhase.SOURCE -> operationSourceInput = ""
+            OperationScanPhase.ITEM -> operationProduct = null
+            OperationScanPhase.DESTINATION -> operationDestinationInput = ""
+            OperationScanPhase.SYNCING -> Unit
+        }
+        operationAwaitingConfirmation = false
+        message = when (operationScanPhase) {
+            OperationScanPhase.SOURCE -> "Rescan source bin"
+            OperationScanPhase.ITEM -> "Rescan item barcode"
+            OperationScanPhase.DESTINATION -> "Rescan destination bin"
+            OperationScanPhase.SYNCING -> "Waiting for server"
+        }
+        requestCameraForCurrentContext()
     }
 
     private fun handleDamageScan(value: String) {
@@ -1419,6 +1735,13 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             return
         }
 
+        if (shipment.status == "RECEIVING" && receiveAdhocMode && receiveProduct != null) {
+            receiveAdhocDestination = canonicalLocation(value)
+            message = "Destination $receiveAdhocDestination scanned • enter quantity, date and reason"
+            checkAdhocPlacement()
+            return
+        }
+
         if (shipment.status == "STOWING" || selectedStowTaskId != null) {
             val pending = shipment.stowTasks.firstOrNull { it.id == selectedStowTaskId }
                 ?: shipment.stowTasks.firstOrNull { it.status != "COMPLETED" }
@@ -1435,7 +1758,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
         resolveBarcode(value) { product ->
             receiveProduct = product
-            message = "${product.title} • confirm good/damaged quantity"
+            message = if (receiveAdhocMode) "${product.title} • scan destination bin"
+                      else "${product.title} • confirm good/damaged quantity"
+            if (receiveAdhocMode) requestCameraScan("Scan ad hoc destination bin")
         }
     }
 

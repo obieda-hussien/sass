@@ -172,6 +172,7 @@ class Shipment(Base):
     storage_domain: Mapped[str] = mapped_column(String(24), default="AMBIENT", index=True)
     status: Mapped[str] = mapped_column(String(24), default="CREATED", index=True)
     dock_ref: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    opening_temperature_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     inbound_location_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     expected_units: Mapped[int] = mapped_column(Integer, default=0)
     received_units: Mapped[int] = mapped_column(Integer, default=0)
@@ -196,6 +197,8 @@ class ShipmentLine(Base):
     received_qty: Mapped[int] = mapped_column(Integer, default=0)
     damaged_qty: Mapped[int] = mapped_column(Integer, default=0)
     missing_qty: Mapped[int] = mapped_column(Integer, default=0)
+    discrepancy_reason: Mapped[Optional[str]] = mapped_column(String(240), nullable=True)
+    adhoc_stowed_qty: Mapped[int] = mapped_column(Integer, default=0)
     lot_code: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     expires_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 

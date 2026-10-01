@@ -77,7 +77,7 @@ data class InventoryLookup(
 )
 
 enum class ConnectivityState { ONLINE, OFFLINE, RECONNECTING }
-enum class AppScreen { HOME, PICK, INVENTORY, UNPACK, BOH, DAMAGE, CYCLE_COUNT, RECOVERY, RECEIVE, REPLENISHMENT }
+enum class AppScreen { HOME, ACTIVITY, PICK, INVENTORY, UNPACK, BOH, DAMAGE, CYCLE_COUNT, RECOVERY, RECEIVE, REPLENISHMENT }
 enum class PickScanPhase { BIN, ITEM, SYNCING, DONE }
 
 
@@ -103,11 +103,27 @@ data class UnpackItemRecommendation(
     val compatibleDestinations: List<String>,
 )
 
+data class UnpackManifestItem(
+    val productId: String,
+    val asin: String?,
+    val title: String,
+    val expectedQty: Int,
+    val verifiedQty: Int,
+    val missingQty: Int,
+)
+
 data class UnpackSummary(
     val sessionId: String,
     val status: String,
     val temperatureClass: String,
     val toteLocationId: String,
+    val sourceRef: String?,
+    val manifestLocked: Boolean,
+    val expectedUnits: Int,
+    val verifiedUnits: Int,
+    val remainingUnits: Int,
+    val completeReady: Boolean,
+    val manifest: List<UnpackManifestItem>,
     val items: List<UnpackItemRecommendation>,
 )
 

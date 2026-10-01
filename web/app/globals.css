@@ -1219,3 +1219,65 @@ select option {
     grid-template-columns: 1fr;
   }
 }
+
+
+.workerIdentityLink {
+  display: grid;
+  gap: 2px;
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+}
+
+.workerIdentityLink:hover strong,
+.tablePersonLink:hover {
+  text-decoration: underline;
+}
+
+.workerCardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tablePersonLink {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.employeeManageSummary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(130px, .6fr));
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+
+.employeeManageSummary > div {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-soft);
+}
+
+.employeeManageSummary small {
+  color: var(--muted);
+}
+
+.employeeProfileForm {
+  grid-column: 1 / -1;
+}
+
+.employeeProfileForm textarea {
+  resize: vertical;
+  min-height: 84px;
+}
+
+@media (max-width: 760px) {
+  .employeeManageSummary {
+    grid-template-columns: 1fr;
+  }
+}

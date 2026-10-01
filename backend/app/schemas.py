@@ -105,8 +105,19 @@ class ReceiveRequest(BaseModel):
     destination_location_id: str
 
 
+class UnpackExpectedItem(BaseModel):
+    product_id: str
+    expected_qty: int = Field(gt=0)
+
+
 class UnpackStartRequest(BaseModel):
     temperature_class: str
+    source_ref: str | None = None
+    expected_items: list[UnpackExpectedItem] = Field(default_factory=list)
+
+
+class UnpackSourceRequest(BaseModel):
+    source_ref: str = Field(min_length=1, max_length=160)
 
 
 class UnpackScanRequest(BaseModel):

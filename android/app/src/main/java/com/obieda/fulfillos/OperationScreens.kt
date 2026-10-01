@@ -5,6 +5,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -26,12 +36,14 @@ private fun OperationPage(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            IconButton(onClick = vm::goHome) {
+                Icon(Icons.Filled.Home, contentDescription = "Home")
+            }
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 Text(subtitle, style = MaterialTheme.typography.bodySmall)
             }
-            TextButton(onClick = vm::goHome) { Text("Home") }
         }
         content()
         Spacer(Modifier.height(30.dp))
@@ -42,29 +54,46 @@ private fun OperationPage(
 private fun ScanEntry(vm: AppViewModel, hint: String, enabled: Boolean = true) {
     var manual by remember { mutableStateOf("") }
     ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Scanner", fontWeight = FontWeight.SemiBold)
-            Text(hint, style = MaterialTheme.typography.bodySmall)
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(28.dp))
+                Spacer(Modifier.width(10.dp))
+                Text(hint, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                IconButton(
+                    onClick = { vm.requestCameraScan(hint) },
+                    enabled = enabled,
+                ) {
+                    Icon(Icons.Filled.CameraAlt, contentDescription = "Open camera scanner")
+                }
+            }
             OutlinedTextField(
                 value = manual,
                 onValueChange = { manual = it },
                 enabled = enabled,
-                label = { Text("Manual scan / barcode") },
+                label = { Text("Barcode / location") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                leadingIcon = { Icon(Icons.Filled.QrCodeScanner, contentDescription = null) },
+                trailingIcon = {
+                    IconButton(
+                        onClick = { vm.submitScanValue(manual); manual = "" },
+                        enabled = enabled && manual.isNotBlank(),
+                    ) {
+                        Icon(Icons.Filled.ArrowForward, contentDescription = "Submit scan")
+                    }
+                },
             )
-            Button(
-                onClick = { vm.submitScanValue(manual); manual = "" },
-                enabled = enabled && manual.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Submit scan") }
         }
     }
 }
 
 @Composable
 fun UnpackScreen(vm: AppViewModel) {
-    OperationPage("Unpack", "Temperature-safe temporary tote → normal stow.", vm) {
+    OperationPage(
+        "Unpack",
+        "Verify the return bag against its expected manifest before it can close.",
+        vm,
+    ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("AMBIENT", "CHILLED", "FROZEN").forEach { temp ->
                 FilterChip(
@@ -74,31 +103,112 @@ fun UnpackScreen(vm: AppViewModel) {
                 )
             }
         }
+
         vm.unpackSummary?.let { summary ->
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Session ${summary.sessionId.take(8)}", fontWeight = FontWeight.Bold)
-                    Text("Temporary tote: ${summary.toteLocationId}")
-                    Text("Status: ${summary.status} · ${summary.temperatureClass}")
-                    summary.items.forEach {
-                        Text("${it.productId.take(10)} · ${it.qty} units · ${it.compatibleDestinations.size} stow options")
+            ElevatedCard(
+                Modifier.fillMaxWidth().animateContentSize(animationSpec = tween(160)),
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Icon(
+                            if (summary.manifestLocked) Icons.Filled.FactCheck else Icons.Filled.QrCodeScanner,
+                            contentDescription = null,
+                            modifier = Modifier.size(30.dp),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (summary.manifestLocked) "Manifest verification" else "Identify return bag",
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                summary.sourceRef ?: summary.toteLocationId,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        AssistChip(
+                            onClick = {},
+                            label = { Text(summary.temperatureClass) },
+                        )
+                    }
+
+                    if (summary.manifestLocked) {
+                        val progress = if (summary.expectedUnits <= 0) 0f
+                        else summary.verifiedUnits.toFloat() / summary.expectedUnits.toFloat()
+                        LinearProgressIndicator(
+                            progress = { progress.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(
+                                "${summary.verifiedUnits}/${summary.expectedUnits} verified",
+                                modifier = Modifier.weight(1f),
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text("${summary.remainingUnits} left")
+                        }
+
+                        summary.manifest.forEach { item ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(
+                                    if (item.missingQty == 0) Icons.Filled.CheckCircle else Icons.Filled.HourglassBottom,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(item.title, fontWeight = FontWeight.SemiBold)
+                                    item.asin?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                                }
+                                Text(
+                                    "${item.verifiedQty}/${item.expectedQty}",
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    } else {
+                        Text(
+                            "Scan the bag/SPOO first. FulfillOS must know what should be inside before item scanning starts.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
             }
+
+            if (!summary.manifestLocked) {
+                ScanEntry(vm, "Scan return bag / SPOO to load expected contents.")
+            } else if (!summary.completeReady) {
+                ScanEntry(vm, "Scan every physical item one by one. Missing or unexpected items cannot close the bag.")
+            } else {
+                ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(32.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Bag fully verified", fontWeight = FontWeight.Bold)
+                            Text("Every expected unit was scanned.", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+
+            Button(
+                onClick = vm::completeCurrentUnpack,
+                enabled = summary.status == "OPEN" && summary.completeReady && !vm.busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Filled.DoneAll, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (summary.completeReady) "Close verified bag" else "Finish locked")
+            }
         }
-        OutlinedTextField(
-            value = vm.operationQtyInput,
-            onValueChange = { vm.operationQtyInput = it.filter(Char::isDigit).take(5) },
-            label = { Text("Quantity per scan") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        ScanEntry(vm, "Scan each item barcode. The event is durable before network transmission.")
-        Button(
-            onClick = vm::completeCurrentUnpack,
-            enabled = vm.unpackSummary?.status == "OPEN" && !vm.busy,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Finish unpack") }
     }
 }
 
@@ -107,26 +217,123 @@ fun BohMoveScreen(vm: AppViewModel) {
     val hint = when (vm.operationScanPhase) {
         OperationScanPhase.SOURCE -> "Scan source bin"
         OperationScanPhase.ITEM -> "Scan item barcode"
-        OperationScanPhase.DESTINATION -> "Scan destination bin"
-        OperationScanPhase.SYNCING -> "Waiting for server ACK"
+        OperationScanPhase.DESTINATION -> "Scan new bin"
+        OperationScanPhase.SYNCING -> "Waiting for server"
     }
-    OperationPage("BOH Move", "Source → item → compatible destination.", vm) {
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(hint, fontWeight = FontWeight.Bold)
-                Text("Source: ${vm.operationSourceInput.ifBlank { "—" }}")
-                Text("Item: ${vm.operationProduct?.title ?: "—"}")
-                Text("Destination: ${vm.operationDestinationInput.ifBlank { "—" }}")
+    val phaseIndex = when (vm.operationScanPhase) {
+        OperationScanPhase.SOURCE -> 0
+        OperationScanPhase.ITEM -> 1
+        OperationScanPhase.DESTINATION -> 2
+        OperationScanPhase.SYNCING -> 3
+    }
+
+    OperationPage("BOH Move", "Scan → review → ✓. Nothing advances until you confirm it.", vm) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(
+                Triple("Bin", Icons.Filled.Inventory2, 0),
+                Triple("Item", Icons.Filled.QrCodeScanner, 1),
+                Triple("New bin", Icons.Filled.MoveToInbox, 2),
+            ).forEach { (label, icon, index) ->
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp),
+                    tonalElevation = if (phaseIndex == index) 4.dp else 0.dp,
+                ) {
+                    Column(
+                        Modifier.padding(vertical = 10.dp),
+                        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            if (phaseIndex > index) Icons.Filled.CheckCircle else icon,
+                            contentDescription = label,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
+
+        AnimatedContent(
+            targetState = vm.operationScanPhase to vm.operationAwaitingConfirmation,
+            transitionSpec = {
+                (fadeIn(tween(110)) + slideInHorizontally(tween(150)) { it / 10 }) togetherWith
+                    (fadeOut(tween(80)) + slideOutHorizontally(tween(110)) { -it / 12 })
+            },
+            label = "boh-step",
+        ) { (phase, awaiting) ->
+            ElevatedCard(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Icon(
+                            when (phase) {
+                                OperationScanPhase.SOURCE -> Icons.Filled.Inventory2
+                                OperationScanPhase.ITEM -> Icons.Filled.QrCodeScanner
+                                OperationScanPhase.DESTINATION -> Icons.Filled.MoveToInbox
+                                OperationScanPhase.SYNCING -> Icons.Filled.Sync
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(30.dp),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(hint, fontWeight = FontWeight.Bold)
+                            Text(
+                                when (phase) {
+                                    OperationScanPhase.SOURCE -> vm.operationSourceInput.ifBlank { "Waiting for source bin" }
+                                    OperationScanPhase.ITEM -> vm.operationProduct?.title ?: "Waiting for item"
+                                    OperationScanPhase.DESTINATION -> vm.operationDestinationInput.ifBlank { "Waiting for new bin" }
+                                    OperationScanPhase.SYNCING -> "Inventory move is being confirmed"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+
+                    if (awaiting) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedButton(
+                                onClick = vm::rescanBohStep,
+                                enabled = !vm.busy,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Filled.Refresh, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Rescan")
+                            }
+                            Button(
+                                onClick = vm::confirmBohStep,
+                                enabled = !vm.busy,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Filled.Check, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Confirm")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         OutlinedTextField(
             value = vm.operationQtyInput,
             onValueChange = { vm.operationQtyInput = it.filter(Char::isDigit).take(5) },
             label = { Text("Move quantity") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
+            leadingIcon = { Icon(Icons.Filled.Numbers, contentDescription = null) },
         )
-        ScanEntry(vm, hint, enabled = vm.operationScanPhase != OperationScanPhase.SYNCING)
+
+        if (!vm.operationAwaitingConfirmation && vm.operationScanPhase != OperationScanPhase.SYNCING) {
+            ScanEntry(vm, hint)
+        }
+        if (vm.operationScanPhase == OperationScanPhase.SYNCING) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
     }
 }
 
@@ -180,7 +387,11 @@ fun CycleCountScreen(vm: AppViewModel) {
                 onClick = { vm.startCycleCount() },
                 enabled = vm.cycleCountLocation.isNotBlank() && !vm.busy,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Start count") }
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Start")
+            }
             ScanEntry(vm, "Or scan the bin to start.")
         } else {
             Text("Counting ${vm.cycleCountLocation}", fontWeight = FontWeight.Bold)
@@ -198,7 +409,11 @@ fun CycleCountScreen(vm: AppViewModel) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Button(onClick = vm::submitCycleCountLine, modifier = Modifier.fillMaxWidth()) { Text("Save count") }
+                Button(onClick = vm::submitCycleCountLine, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Save, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Save")
+                }
             }
             ScanEntry(vm, "Scan item barcode, enter the physical quantity, then save it.")
             if (vm.cycleCountEntries.isNotEmpty()) {
@@ -211,7 +426,9 @@ fun CycleCountScreen(vm: AppViewModel) {
                     }
                 }
                 Button(onClick = vm::applyCurrentCycleCount, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-                    Text("Apply reconciliation")
+                    Icon(Icons.Filled.DoneAll, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Apply")
                 }
             }
         }
@@ -231,7 +448,11 @@ fun RecoveryScreen(vm: AppViewModel) {
             onClick = { vm.loadRecovery() },
             enabled = vm.recoveryTaskIdInput.isNotBlank() && !vm.busy,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text("Load recovery") }
+        ) {
+            Icon(Icons.Filled.Search, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Load")
+        }
         vm.recoverySummary?.let { recovery ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -254,7 +475,11 @@ fun ReceiveScreen(vm: AppViewModel) {
     OperationPage("Receive & Stow", "Vendor / ambient / chilled / frozen / HAZ / HRV inbound execution.", vm) {
         val selected = vm.selectedShipment
         if (selected == null) {
-            Button(onClick = vm::loadShipments, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Refresh shipments") }
+            Button(onClick = vm::loadShipments, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.Refresh, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Refresh")
+            }
             vm.shipments.forEach { shipment ->
                 ElevatedCard(onClick = { vm.selectShipment(shipment) }, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -273,9 +498,60 @@ fun ReceiveScreen(vm: AppViewModel) {
                     if (selected.stowOverdue) Text("Stow SLA overdue", color = MaterialTheme.colorScheme.error)
                 }
             }
+            if (selected.status == "CREATED" || selected.status == "DOCKED") {
+                Text("Shipment zone: ${selected.storageDomain}. Confirm the physical receiving zone.")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("AMBIENT", "CHILLED", "FROZEN").forEach { zone ->
+                        FilterChip(selected = vm.receiveZoneInput == zone,
+                            onClick = { vm.receiveZoneInput = zone }, label = { Text(zone) })
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("PRODUCE", "HAZ", "HRV").forEach { zone ->
+                        FilterChip(selected = vm.receiveZoneInput == zone,
+                            onClick = { vm.receiveZoneInput = zone }, label = { Text(zone) })
+                    }
+                }
+                OutlinedTextField(
+                    value = vm.receiveTemperatureInput,
+                    onValueChange = { vm.receiveTemperatureInput = it.filter { c -> c.isDigit() || c == '-' || c == '.' }.take(7) },
+                    label = { Text("Current temperature °C") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(onClick = vm::openSelectedShipment, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                    Text("Open shipment in ${vm.receiveZoneInput}")
+                }
+            }
             if (selected.status == "RECEIVING") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = !vm.receiveAdhocMode,
+                        onClick = { vm.chooseReceiveAdhocMode(false) },
+                        label = { Text("Planned receipt") })
+                    FilterChip(selected = vm.receiveAdhocMode,
+                        onClick = { vm.chooseReceiveAdhocMode(true) },
+                        label = { Text("Ad hoc direct stow") })
+                }
                 vm.receiveProduct?.let { product ->
                     Text(product.title, fontWeight = FontWeight.Bold)
+                    val expectedLine = selected.lines.firstOrNull { it.productId == product.productId }
+                    Text(if (expectedLine == null) "Unplanned item: enter a discrepancy reason below"
+                         else "Expected ${expectedLine.expectedQty} · already received ${expectedLine.receivedQty} · scan quantity and record")
+                    if (vm.receiveAdhocMode) {
+                        OutlinedTextField(
+                            value = vm.receiveAdhocDestination,
+                            onValueChange = { vm.receiveAdhocDestination = it.uppercase() },
+                            label = { Text("Scan destination bin") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Button(onClick = vm::checkAdhocPlacement, modifier = Modifier.fillMaxWidth()) {
+                            Text("Check bin zone")
+                        }
+                        if (vm.receivePlacementHint.isNotBlank()) Text(vm.receivePlacementHint)
+                        expectedLine?.recommendedStow?.take(3)?.let { bins ->
+                            if (bins.isNotEmpty()) Text("Compatible suggestions: ${bins.joinToString()}")
+                        }
+                    }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = vm.receiveGoodQtyInput,
@@ -304,11 +580,25 @@ fun ReceiveScreen(vm: AppViewModel) {
                         label = { Text("Expiry YYYY-MM-DD (optional)") },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Button(onClick = vm::submitReceiveLine, modifier = Modifier.fillMaxWidth()) { Text("Record receipt") }
+                    OutlinedTextField(
+                        value = vm.receiveDiscrepancyInput,
+                        onValueChange = { vm.receiveDiscrepancyInput = it.take(240) },
+                        label = { Text("Reason for unexpected / excess item") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Button(onClick = if (vm.receiveAdhocMode) vm::submitAdhocStow else vm::submitReceiveLine,
+                        modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Filled.Save, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (vm.receiveAdhocMode) "Confirm ad hoc stow" else "Record")
+                    }
                 }
-                ScanEntry(vm, "Scan product barcode.")
+                ScanEntry(vm, if (vm.receiveAdhocMode && vm.receiveProduct != null) "Scan destination bin."
+                              else "Scan product barcode.")
                 Button(onClick = vm::completeSelectedReceiving, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-                    Text("Finish receiving & create stow tasks")
+                    Icon(Icons.Filled.DoneAll, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Finish receive")
                 }
             }
             if (selected.status == "STOWING" || selected.stowTasks.isNotEmpty()) {
@@ -345,11 +635,17 @@ fun ReceiveScreen(vm: AppViewModel) {
                         onClick = vm::confirmSelectedStow,
                         enabled = vm.stowDestinationInput.isNotBlank() && !vm.busy,
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Confirm stow") }
+                    ) {
+                        Icon(Icons.Filled.CheckCircle, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Confirm")
+                    }
                 }
             }
             OutlinedButton(onClick = vm::clearSelectedShipment, modifier = Modifier.fillMaxWidth()) {
-                Text("Back to shipment list")
+                Icon(Icons.Filled.ArrowBack, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Shipments")
             }
         }
     }
@@ -360,7 +656,11 @@ fun ReplenishmentScreen(vm: AppViewModel) {
     OperationPage("Replenishment", "Move reserve stock into pick faces with scan validation.", vm) {
         val active = vm.activeReplenishment
         if (active == null) {
-            Button(onClick = vm::loadReplenishmentQueue, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Refresh queue") }
+            Button(onClick = vm::loadReplenishmentQueue, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.Refresh, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Refresh")
+            }
             vm.replenishmentTasks.forEach { task ->
                 ElevatedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -372,7 +672,11 @@ fun ReplenishmentScreen(vm: AppViewModel) {
                             onClick = { vm.claimReplenishment(task) },
                             enabled = task.status in setOf("READY", "ASSIGNED") && !vm.busy,
                             modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Claim task") }
+                        ) {
+                            Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Claim")
+                        }
                     }
                 }
             }
@@ -402,7 +706,9 @@ fun ReplenishmentScreen(vm: AppViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(onClick = vm::completeActiveReplenishment, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-                    Text("Commit replenishment")
+                    Icon(Icons.Filled.DoneAll, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Commit")
                 }
             }
         }

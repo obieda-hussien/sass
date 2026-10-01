@@ -8,6 +8,12 @@ The project is reliability-first: PostgreSQL owns transactional truth, client ac
 
 _Status snapshot: 28 September 2026._
 
+The open [PR #30](https://github.com/obieda-hussien/sass/pull/30) adds direct
+employee management, PDA activity and icon-first navigation. Its inbound
+follow-up now binds a multi-bag SPOO scan to the complete order manifest,
+records receiving-zone temperature and unplanned-stock reasons, and gives
+managers item-level shortfall and putaway progress with a partial-close action.
+
 | Component | Current state |
 | --- | --- |
 | FulfillOS release | **v0.5.1** |
