@@ -245,17 +245,58 @@ The completion event is idempotent and moves inventory through the normal invent
 ```text
 POST /ops/shipments
 GET  /ops/shipments
+GET  /ops/shipments/lookup?code=4ZOXV48Q
 GET  /ops/shipments/{shipment_id}
 POST /ops/shipments/{shipment_id}/dock-check-in
 POST /ops/shipments/{shipment_id}/open
 POST /ops/shipments/{shipment_id}/receive
+POST /ops/shipments/{shipment_id}/direct-stow
+POST /ops/shipments/{shipment_id}/adhoc-stow  # backward-compatible alias
+POST /ops/shipments/{shipment_id}/leave
+POST /ops/shipments/{shipment_id}/issues
+POST /ops/shipments/{shipment_id}/issues/{issue_id}/resolve
+POST /ops/shipments/{shipment_id}/manager-close-receive
 POST /ops/shipments/{shipment_id}/complete-receive
 
 GET  /ops/stow/{task_id}/recommendations
 POST /ops/stow/{task_id}/complete
 ```
 
+Shipment list, lookup, reading, joining, leaving and issue reporting require an
+active authenticated warehouse session, not `operations.manage`. Creation,
+issue resolution and partial receiving closure require `operations.manage`.
 HAZ/HRV receiving requires the relevant qualification.
+
+Creation accepts optional `label` (blank generates a code), `supplier_name`,
+`purchase_order_ref`, `order_date`, `delivery_from`, `delivery_to`,
+`shipping_address`, `notes`, `storage_domain`, `shipment_type` and `lines`.
+Each line accepts `product_id` as ID, SKU/ASIN or barcode, `expected_qty`,
+`lot_code` and `expires_on`. Codes use 3–48 uppercase ASCII letters, digits,
+`-`, `.`, `_` or `/`.
+
+`open` records `opening_temperature_c` on first opening. Joining an already
+opened shipment may omit the temperature. Each worker has one open session;
+rejoining on another device rebinds the session to that device. `leave` pauses
+only the caller's session and preserves the shipment.
+
+`direct-stow` accepts `event_id`, `product_id`, `destination_location_id`, `qty`,
+optional `lot_code`, `expires_on` and `reason`. A reason is required only for
+unplanned/excess stock. The old `adhoc-stow` path remains supported. Receipt
+and direct-stow events reject payload changes, including expiry and lot.
+
+Issue requests carry `event_id`, optional `product_id`, `issue_type`, `qty`,
+`notes`, optional `lot_code` and `expires_on`. Types: `DAMAGED`, `EXPIRED`,
+`WRONG_ITEM`, `MISSING`, `TEMPERATURE`, `PACKAGING`, `OTHER`. Item-specific
+issues require a product and positive quantity. `DAMAGED`/`EXPIRED` require
+an open receiving session and record rejected incoming stock in `DMG`;
+other types are incidents without inventory effects. Retrying identical
+issue events returns `duplicate: true`. Resolving requires `resolution` text
+and records the manager/time without changing stock.
+
+Shipment payloads include `barcode_value`, supplier/PO/date metadata, enriched
+item `title`/`asin`/`barcode`, `issues`, `open_issues` and `receiving_users`.
+Regular `complete-receive` rejects remaining expected units with
+`PARTIAL_RECEIPT_REQUIRES_MANAGER`; manager closure records the shortfall.
 
 ## Topology, capacity and optimization
 

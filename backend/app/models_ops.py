@@ -168,6 +168,13 @@ class Shipment(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     label: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+    purchase_order_ref: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    order_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    delivery_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    delivery_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    shipping_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     shipment_type: Mapped[str] = mapped_column(String(40), default="VENDOR", index=True)
     storage_domain: Mapped[str] = mapped_column(String(24), default="AMBIENT", index=True)
     status: Mapped[str] = mapped_column(String(24), default="CREATED", index=True)
@@ -201,6 +208,36 @@ class ShipmentLine(Base):
     adhoc_stowed_qty: Mapped[int] = mapped_column(Integer, default=0)
     lot_code: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     expires_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+
+class ShipmentScanReceipt(Base):
+    __tablename__ = "shipment_scan_receipts"
+
+    event_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    shipment_id: Mapped[str] = mapped_column(ForeignKey("shipments.id"), index=True)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ShipmentIssue(Base):
+    __tablename__ = "shipment_issues"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    event_id: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    shipment_id: Mapped[str] = mapped_column(ForeignKey("shipments.id"), index=True)
+    product_id: Mapped[Optional[str]] = mapped_column(ForeignKey("products.id"), nullable=True)
+    issue_type: Mapped[str] = mapped_column(String(32))
+    qty: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[str] = mapped_column(String(1000))
+    lot_code: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    expires_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"))
+    status: Mapped[str] = mapped_column(String(24), default="OPEN", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_by_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
 
 
 class ReceivingSession(Base):

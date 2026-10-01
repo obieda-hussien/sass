@@ -22,6 +22,7 @@ from .models_ops import (
     LeaveRequest,
     OvertimeRequest,
     Shipment,
+    ShipmentIssue,
     StowTask,
     WorkerQualification,
     WorkerDispatchProfile,
@@ -77,6 +78,7 @@ from .services.ops_platform import (
     search_orders,
     set_worker_state,
     shipment_payload,
+    report_shipment_issue,
     skip_task_item,
     damage_task_item,
     slotting_suggestions,
@@ -230,18 +232,25 @@ class PayrollPolicyRequest(BaseModel):
 
 
 class ShipmentLineInput(BaseModel):
-    product_id: str
-    expected_qty: int = Field(default=0, ge=0)
-    lot_code: str | None = None
+    product_id: str = Field(min_length=1, max_length=120)
+    expected_qty: int = Field(default=0, ge=0, le=100000)
+    lot_code: str | None = Field(default=None, max_length=80)
     expires_on: date | None = None
 
 
 class ShipmentCreateRequest(BaseModel):
-    label: str
-    shipment_type: str = "VENDOR"
+    label: str = Field(default="", max_length=48)
+    supplier_name: str | None = Field(default=None, max_length=160)
+    purchase_order_ref: str | None = Field(default=None, max_length=120)
+    order_date: date | None = None
+    delivery_from: date | None = None
+    delivery_to: date | None = None
+    shipping_address: str | None = Field(default=None, max_length=500)
+    notes: str | None = Field(default=None, max_length=1000)
+    shipment_type: str = Field(default="VENDOR", min_length=1, max_length=40)
     storage_domain: str = "AMBIENT"
     target_stow_minutes: int | None = Field(default=None, ge=5, le=1440)
-    lines: list[ShipmentLineInput] = Field(default_factory=list)
+    lines: list[ShipmentLineInput] = Field(default_factory=list, max_length=500)
 
 
 class DockCheckInRequest(BaseModel):
@@ -249,28 +258,42 @@ class DockCheckInRequest(BaseModel):
 
 
 class ShipmentReceiveRequest(BaseModel):
-    event_id: str
+    event_id: str = Field(min_length=1, max_length=120)
     product_id: str
     good_qty: int = Field(default=0, ge=0)
     damaged_qty: int = Field(default=0, ge=0)
-    lot_code: str | None = None
+    lot_code: str | None = Field(default=None, max_length=80)
     expires_on: date | None = None
     discrepancy_reason: str | None = Field(default=None, max_length=240)
 
 
 class ShipmentOpenRequest(BaseModel):
     storage_domain: str | None = None
-    opening_temperature_c: float = Field(ge=-50, le=60)
+    opening_temperature_c: float | None = Field(default=None, ge=-50, le=60)
 
 
 class ShipmentAdhocStowRequest(BaseModel):
-    event_id: str
+    event_id: str = Field(min_length=1, max_length=120)
     product_id: str
     destination_location_id: str
     qty: int = Field(gt=0)
     expires_on: date | None = None
-    lot_code: str | None = None
-    reason: str = Field(min_length=3, max_length=240)
+    lot_code: str | None = Field(default=None, max_length=80)
+    reason: str | None = Field(default=None, min_length=3, max_length=240)
+
+
+class ShipmentIssueRequest(BaseModel):
+    event_id: str = Field(min_length=1, max_length=120)
+    product_id: str | None = None
+    issue_type: str
+    qty: int = Field(default=0, ge=0, le=100000)
+    notes: str = Field(min_length=3, max_length=1000)
+    lot_code: str | None = Field(default=None, max_length=80)
+    expires_on: date | None = None
+
+
+class ShipmentIssueResolveRequest(BaseModel):
+    resolution: str = Field(min_length=3, max_length=1000)
 
 
 class StowCompleteRequest(BaseModel):
@@ -1398,7 +1421,9 @@ def shipment_create(
                 lines=[line.model_dump() for line in req.lines],
                 created_by_user_id=manager.id,
                 target_stow_minutes=req.target_stow_minutes,
+                metadata=req.model_dump(include={"supplier_name", "purchase_order_ref", "order_date", "delivery_from", "delivery_to", "shipping_address", "notes"}),
             )
+            audit_event(db, actor_user_id=manager.id, action="CREATE_SHIPMENT", entity_type="SHIPMENT", entity_id=shipment.id, reason=shipment.label)
             return shipment_payload(db, shipment)
     except OpsError as exc:
         fail(exc)
@@ -1407,7 +1432,7 @@ def shipment_create(
 @router.get("/ops/shipments")
 def shipment_list(
     status: str | None = None,
-    who=Depends(ops_manager),
+    who=Depends(ops_actor),
     db: Session = Depends(get_db),
 ):
     query = select(Shipment).order_by(Shipment.created_at.desc())
@@ -1415,6 +1440,48 @@ def shipment_list(
         query = query.where(Shipment.status == status.upper())
     rows = db.scalars(query.limit(200)).all()
     return {"shipments": [shipment_payload(db, row) for row in rows]}
+
+
+@router.get("/ops/shipments/lookup")
+def shipment_lookup(code: str = Query(min_length=1, max_length=120), who=Depends(ops_actor), db: Session = Depends(get_db)):
+    from sqlalchemy import or_
+    needle = code.strip()
+    shipment = db.scalar(select(Shipment).where(or_(Shipment.label == needle.upper(), Shipment.id == needle.lower())))
+    if not shipment:
+        raise HTTPException(404, "Shipment barcode not found")
+    return shipment_payload(db, shipment)
+
+
+@router.post("/ops/shipments/{shipment_id}/issues")
+def shipment_issue_report(shipment_id: str, req: ShipmentIssueRequest, who=Depends(ops_actor), db: Session = Depends(get_db)):
+    try:
+        with db.begin():
+            shipment = db.scalar(select(Shipment).where(Shipment.id == shipment_id).with_for_update())
+            if not shipment:
+                raise HTTPException(404, "Shipment not found")
+            result = report_shipment_issue(db, shipment=shipment, user_id=who[0].id, device_id=who[1].id, **req.model_dump())
+            if not result["duplicate"]:
+                audit_event(db, actor_user_id=who[0].id, action="REPORT_SHIPMENT_ISSUE", entity_type="SHIPMENT_ISSUE", entity_id=result["issue"]["id"], reason=req.notes)
+            return result
+    except OpsError as exc:
+        fail(exc)
+
+
+@router.post("/ops/shipments/{shipment_id}/issues/{issue_id}/resolve")
+def shipment_issue_resolve(shipment_id: str, issue_id: str, req: ShipmentIssueResolveRequest, who=Depends(ops_manager), db: Session = Depends(get_db)):
+    with db.begin():
+        issue = db.scalar(select(ShipmentIssue).where(ShipmentIssue.id == issue_id, ShipmentIssue.shipment_id == shipment_id).with_for_update())
+        if not issue:
+            raise HTTPException(404, "Issue not found")
+        if len(req.resolution.strip()) < 3:
+            raise HTTPException(422, "Describe how the issue was resolved")
+        if issue.status != "RESOLVED":
+            issue.status = "RESOLVED"
+            issue.resolution = req.resolution.strip()
+            issue.resolved_by_user_id = who[0].id
+            issue.resolved_at = datetime.now(timezone.utc)
+            audit_event(db, actor_user_id=who[0].id, action="RESOLVE_SHIPMENT_ISSUE", entity_type="SHIPMENT_ISSUE", entity_id=issue.id, reason=issue.resolution)
+        return shipment_payload(db, db.get(Shipment, shipment_id))
 
 
 @router.get("/ops/shipments/{shipment_id}")
@@ -1491,7 +1558,7 @@ def shipment_open(
     user, device = who
     try:
         with db.begin():
-            shipment = db.get(Shipment, shipment_id)
+            shipment = db.scalar(select(Shipment).where(Shipment.id == shipment_id).with_for_update())
             if not shipment:
                 raise HTTPException(404, "Shipment not found")
             session = open_shipment_receiving(
@@ -1520,7 +1587,7 @@ def shipment_receive(
     user, device = who
     try:
         with db.begin():
-            shipment = db.get(Shipment, shipment_id)
+            shipment = db.scalar(select(Shipment).where(Shipment.id == shipment_id).with_for_update())
             if not shipment:
                 raise HTTPException(404, "Shipment not found")
             from .models_ops import ReceivingSession
@@ -1552,6 +1619,24 @@ def shipment_receive(
         fail(exc)
 
 
+@router.post("/ops/shipments/{shipment_id}/leave")
+def shipment_leave(shipment_id: str, who=Depends(ops_actor), db: Session = Depends(get_db)):
+    from .models_ops import ReceivingSession
+    with db.begin():
+        shipment = db.scalar(select(Shipment).where(Shipment.id == shipment_id).with_for_update())
+        if not shipment:
+            raise HTTPException(404, "Shipment not found")
+        sessions = db.scalars(select(ReceivingSession).where(ReceivingSession.shipment_id == shipment_id,
+            ReceivingSession.user_id == who[0].id, ReceivingSession.status == "OPEN")).all()
+        for session in sessions:
+            session.status = "PAUSED"
+            session.completed_at = datetime.now(timezone.utc)
+        state = get_worker_state(db, who[0].id)
+        if state.activity_ref == shipment_id and state.state.startswith("RECEIVING"):
+            set_worker_state(db, who[0].id, "AVAILABLE", reason="LEFT_SHARED_RECEIVING")
+        return shipment_payload(db, shipment)
+
+
 @router.post("/ops/shipments/{shipment_id}/complete-receive")
 def shipment_receive_complete(
     shipment_id: str,
@@ -1561,7 +1646,7 @@ def shipment_receive_complete(
     user, device = who
     try:
         with db.begin():
-            shipment = db.get(Shipment, shipment_id)
+            shipment = db.scalar(select(Shipment).where(Shipment.id == shipment_id).with_for_update())
             if not shipment:
                 raise HTTPException(404, "Shipment not found")
             from .models_ops import ReceivingSession
@@ -1577,11 +1662,14 @@ def shipment_receive_complete(
             )
             if not session:
                 raise OpsError("No open receiving session", "NO_OPEN_RECEIVING_SESSION")
+            if shipment_payload(db, shipment)["remaining_expected_units"] > 0:
+                raise OpsError("Expected items remain. Ask a manager to close a partial receipt", "PARTIAL_RECEIPT_REQUIRES_MANAGER")
             return complete_receiving(db, shipment, session)
     except OpsError as exc:
         fail(exc)
 
 
+@router.post("/ops/shipments/{shipment_id}/direct-stow")
 @router.post("/ops/shipments/{shipment_id}/adhoc-stow")
 def shipment_adhoc_stow(
     shipment_id: str,
@@ -1622,7 +1710,7 @@ def shipment_manager_close_receive(
     from .models_ops import ReceivingSession
     try:
         with db.begin():
-            shipment = db.get(Shipment, shipment_id)
+            shipment = db.scalar(select(Shipment).where(Shipment.id == shipment_id).with_for_update())
             if not shipment:
                 raise HTTPException(404, "Shipment not found")
             if shipment.status != "RECEIVING":

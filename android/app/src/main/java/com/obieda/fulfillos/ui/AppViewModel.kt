@@ -120,6 +120,26 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         private set
     var receiveProduct by mutableStateOf<BarcodeProduct?>(null)
         private set
+    var receivingJoined by mutableStateOf(false)
+        private set
+    var shipmentIssueVisible by mutableStateOf(false)
+    var shipmentIssueType by mutableStateOf("DAMAGED")
+    var shipmentIssueQty by mutableStateOf("1")
+    var shipmentIssueNotes by mutableStateOf("")
+    private fun inboundEvent(parts: List<Any?>): String? = runCatching {
+        graph.secureSession.inboundEvent(org.json.JSONArray(listOf(session?.userId) + parts).toString())
+    }.getOrElse {
+        errorMessage = "Could not save scan retry identity. Free some device storage and try again."
+        null
+    }
+
+    private fun validReceiveDate(): Boolean {
+        if (receiveExpiryInput.isBlank()) return true
+        if (runCatching { java.time.LocalDate.parse(receiveExpiryInput.trim()) }.isSuccess) return true
+        errorMessage = "Choose a valid expiry date"
+        return false
+    }
+
     var receiveGoodQtyInput by mutableStateOf("1")
     var receiveDamagedQtyInput by mutableStateOf("0")
     var receiveLotInput by mutableStateOf("")
@@ -127,7 +147,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     var receiveTemperatureInput by mutableStateOf("")
     var receiveZoneInput by mutableStateOf("")
     var receiveDiscrepancyInput by mutableStateOf("")
-    var receiveAdhocMode by mutableStateOf(false)
+    var receiveAdhocMode by mutableStateOf(true)
     var receiveAdhocDestination by mutableStateOf("")
     var receivePlacementHint by mutableStateOf("")
         private set
@@ -1092,6 +1112,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     fun clearSelectedShipment() {
         selectedShipment = null
+        receivingJoined = false
         receiveProduct = null
         selectedStowTaskId = null
         stowDestinationInput = ""
@@ -1145,6 +1166,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     fun selectShipment(shipment: ShipmentSummary) {
         if (busy) return
         selectedShipment = shipment
+        receivingJoined = false
+        receiveTemperatureInput = shipment.openingTemperatureC?.toString().orEmpty()
         receiveZoneInput = shipment.storageDomain
         receiveProduct = null
         selectedStowTaskId = null
@@ -1160,10 +1183,11 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     fun openSelectedShipment() {
         val shipment = selectedShipment ?: return
         val temperature = receiveTemperatureInput.trim().toDoubleOrNull()
-        if (temperature == null) {
+        if (temperature == null && shipment.openingTemperatureC == null) {
             errorMessage = "Enter the measured temperature in °C"
             return
         }
+        if (busy) return
         busy = true
         message = "Opening ${shipment.label}…"
         worker.execute {
@@ -1176,6 +1200,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 busy = false
                 if (updated != null) {
                     selectedShipment = updated
+                    receivingJoined = true
+                    errorMessage = null
                     message = if (updated.status == "STOWING") {
                         "Stow ${updated.label} • scan destination"
                     } else {
@@ -1194,16 +1220,19 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         val product = receiveProduct ?: return
         val good = receiveGoodQtyInput.toIntOrNull() ?: 0
         val damaged = receiveDamagedQtyInput.toIntOrNull() ?: 0
+        if (!receivingJoined || !validReceiveDate()) return
         if (good + damaged <= 0 || busy) {
             errorMessage = "Enter received or damaged quantity"
             return
         }
+        val eventId = inboundEvent(listOf("receive", shipment.id, product.productId, good, damaged,
+            receiveLotInput, receiveExpiryInput, receiveDiscrepancyInput)) ?: return
         busy = true
         worker.execute {
             val response = callWithRefresh {
                 graph.api.receiveShipmentLine(
                     shipmentId = shipment.id,
-                    eventId = UUID.randomUUID().toString(),
+                    eventId = eventId,
                     productId = product.productId,
                     goodQty = good,
                     damagedQty = damaged,
@@ -1215,6 +1244,9 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             ui {
                 busy = false
                 if (response.ok) {
+                    graph.secureSession.clearInboundEvent()
+                    receiveLotInput = ""
+                    receiveExpiryInput = ""
                     receiveProduct = null
                     receiveGoodQtyInput = "1"
                     receiveDamagedQtyInput = "0"
@@ -1235,26 +1267,33 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         val qty = receiveGoodQtyInput.toIntOrNull() ?: 0
         val destination = receiveAdhocDestination.trim().uppercase()
         val reason = receiveDiscrepancyInput.trim()
-        if (busy) return
-        if (qty <= 0 || destination.isBlank() || reason.length < 3) {
-            errorMessage = "Scan item and destination, then enter quantity and a reason"
+        if (busy || !receivingJoined || !validReceiveDate()) return
+        val line = shipment.lines.firstOrNull { it.productId == product.productId }
+        val unexpected = line == null || line.receivedQty + line.damagedQty + qty > line.expectedQty
+        if (qty <= 0 || destination.isBlank() || (unexpected && reason.length < 3)) {
+            errorMessage = "Scan item and bin, enter quantity, and explain any excess or unexpected stock"
             return
         }
+        val eventId = inboundEvent(listOf("direct-stow", shipment.id, product.productId, destination, qty,
+            receiveLotInput, receiveExpiryInput, reason)) ?: return
         busy = true
         worker.execute {
             val response = callWithRefresh { graph.api.adhocStowShipmentItem(
-                shipment.id, UUID.randomUUID().toString(), product.productId,
+                shipment.id, eventId, product.productId,
                 destination, qty, receiveExpiryInput.trim().ifBlank { null },
-                receiveLotInput.trim().ifBlank { null }, reason,
+                receiveLotInput.trim().ifBlank { null }, reason.ifBlank { null },
             ) }
             ui {
                 busy = false
                 if (response.ok) {
+                    graph.secureSession.clearInboundEvent()
+                    receiveLotInput = ""
+                    receiveExpiryInput = ""
                     receiveProduct = null
                     receiveAdhocDestination = ""
                     receiveGoodQtyInput = "1"
                     receiveDiscrepancyInput = ""
-                    message = "Ad hoc stock stowed in $destination • scan next item"
+                    message = "Stock stowed in $destination • scan next item"
                     refreshSelectedShipment()
                     requestCameraScan("Scan next received product barcode")
                 } else {
@@ -1265,6 +1304,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     }
 
     fun chooseReceiveAdhocMode(enabled: Boolean) {
+        if (busy) return
         receiveAdhocMode = enabled
         receiveProduct = null
         receiveAdhocDestination = ""
@@ -1342,13 +1382,76 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     private fun refreshSelectedShipment() {
         val id = selectedShipment?.id ?: return
         worker.execute {
-            val response = callWithRefresh { graph.api.getShipments() }
-            val list = if (response.ok) runCatching { graph.api.parseShipments(response.body) }.getOrNull() else null
+            val response = callWithRefresh { graph.api.getShipment(id) }
+            val updated = if (response.ok) runCatching { graph.api.parseShipment(response.body) }.getOrNull() else null
             ui {
-                if (list != null) {
-                    shipments = list.filter { it.status != "COMPLETED" && it.status != "CANCELLED" }
-                    selectedShipment = list.firstOrNull { it.id == id }
+                if (updated != null && selectedShipment?.id == id) {
+                    selectedShipment = updated
+                    if (updated.status != "RECEIVING") receivingJoined = false
                 }
+            }
+        }
+    }
+
+    fun lookupShipmentBarcode(code: String) {
+        if (busy || code.isBlank()) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.lookupShipment(code) }
+            val shipment = if (response.ok) runCatching { graph.api.parseShipment(response.body) }.getOrNull() else null
+            ui {
+                busy = false
+                if (shipment != null) { errorMessage = null; selectShipment(shipment) }
+                else errorMessage = graph.api.parseConflictMessage(response.body)
+            }
+        }
+    }
+
+    fun leaveSelectedReceiving() {
+        val shipment = selectedShipment ?: return
+        if (busy) return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.leaveShipment(shipment.id) }
+            ui {
+                busy = false
+                if (response.ok) { clearSelectedShipment(); loadShipments() }
+                else errorMessage = graph.api.parseConflictMessage(response.body)
+            }
+        }
+    }
+
+    fun submitShipmentIssue() {
+        val shipment = selectedShipment ?: return
+        if (busy || !validReceiveDate()) return
+        val qty = shipmentIssueQty.toIntOrNull() ?: 0
+        val notes = shipmentIssueNotes.trim()
+        val productId = receiveProduct?.productId
+        if (notes.length < 3 || (shipmentIssueType !in listOf("TEMPERATURE", "OTHER") && (productId == null || qty <= 0))) {
+            errorMessage = "Scan the affected item, enter its quantity and describe the issue"
+            return
+        }
+        val eventId = inboundEvent(listOf("issue", shipment.id, productId, shipmentIssueType, qty, notes,
+            receiveLotInput, receiveExpiryInput)) ?: return
+        busy = true
+        worker.execute {
+            val response = callWithRefresh { graph.api.reportShipmentIssue(shipment.id, eventId,
+                productId, shipmentIssueType, qty, notes, receiveLotInput.trim().ifBlank { null },
+                receiveExpiryInput.trim().ifBlank { null }) }
+            val updated = if (response.ok) runCatching {
+                graph.api.parseShipment(org.json.JSONObject(response.body).getJSONObject("shipment").toString())
+            }.getOrNull() else null
+            ui {
+                busy = false
+                if (updated != null) {
+                    selectedShipment = updated
+                    graph.secureSession.clearInboundEvent()
+                    shipmentIssueVisible = false
+                    shipmentIssueNotes = ""
+                    shipmentIssueQty = "1"
+                    errorMessage = null
+                    message = "Issue recorded • rejected units stay out of sellable stock"
+                } else errorMessage = graph.api.parseConflictMessage(response.body)
             }
         }
     }
@@ -1723,19 +1826,16 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
     private fun handleReceiveScan(value: String) {
         val shipment = selectedShipment
         if (shipment == null) {
-            val needle = value.trim().uppercase()
-            val match = shipments.firstOrNull {
-                it.id.equals(needle, true) || it.label.equals(needle, true)
-            }
-            if (match != null) selectShipment(match)
-            else {
-                errorMessage = "Shipment not found"
-                requestCameraScan("Scan shipment label or ID")
-            }
+            lookupShipmentBarcode(value)
+            return
+        }
+        if (shipment.status != "RECEIVING" && shipment.status != "STOWING") return
+        if (shipment.status == "RECEIVING" && !receivingJoined) {
+            errorMessage = "Tap Join receiving before scanning items"
             return
         }
 
-        if (shipment.status == "RECEIVING" && receiveAdhocMode && receiveProduct != null) {
+        if (shipment.status == "RECEIVING" && receiveAdhocMode && receiveProduct != null && !shipmentIssueVisible) {
             receiveAdhocDestination = canonicalLocation(value)
             message = "Destination $receiveAdhocDestination scanned • enter quantity, date and reason"
             checkAdhocPlacement()
@@ -1758,9 +1858,11 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
         resolveBarcode(value) { product ->
             receiveProduct = product
+            receiveLotInput = ""
+            receiveExpiryInput = ""
             message = if (receiveAdhocMode) "${product.title} • scan destination bin"
                       else "${product.title} • confirm good/damaged quantity"
-            if (receiveAdhocMode) requestCameraScan("Scan ad hoc destination bin")
+            if (receiveAdhocMode && !shipmentIssueVisible) requestCameraScan("Scan destination bin")
         }
     }
 

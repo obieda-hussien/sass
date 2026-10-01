@@ -5,6 +5,7 @@ import com.obieda.fulfillos.domain.InventoryLookup
 import com.obieda.fulfillos.domain.StowTaskSummary
 import com.obieda.fulfillos.domain.ShipmentSummary
 import com.obieda.fulfillos.domain.ShipmentLineSummary
+import com.obieda.fulfillos.domain.ShipmentIssueSummary
 import com.obieda.fulfillos.domain.ReplenishmentSummary
 import com.obieda.fulfillos.domain.RecoverySummary
 import com.obieda.fulfillos.domain.RecoveryItem
@@ -258,13 +259,26 @@ class ApiClient {
 
     fun getShipments(): Result = request("/ops/shipments", null, "GET")
 
+    fun lookupShipment(code: String): Result = request("/ops/shipments/lookup?code=${encode(code.trim())}", null, "GET")
+
+    fun getShipment(shipmentId: String): Result = request("/ops/shipments/${encode(shipmentId)}", null, "GET")
+
+    fun leaveShipment(shipmentId: String): Result = request("/ops/shipments/${encode(shipmentId)}/leave", "{}")
+
+    fun reportShipmentIssue(shipmentId: String, eventId: String, productId: String?,
+        issueType: String, qty: Int, notes: String, lotCode: String?, expiresOn: String?): Result =
+        request("/ops/shipments/${encode(shipmentId)}/issues", JSONObject()
+            .put("event_id", eventId).put("product_id", productId ?: JSONObject.NULL)
+            .put("issue_type", issueType).put("qty", qty).put("notes", notes)
+            .put("lot_code", lotCode ?: JSONObject.NULL).put("expires_on", expiresOn ?: JSONObject.NULL).toString())
+
     fun getShipmentPlacement(shipmentId: String, productId: String, destination: String): Result =
         request("/ops/shipments/${encode(shipmentId)}/placement?product_id=${encode(productId)}" +
             "&destination_location_id=${encode(destination)}", null, "GET")
 
-    fun openShipment(shipmentId: String, zone: String, temperatureC: Double): Result =
+    fun openShipment(shipmentId: String, zone: String, temperatureC: Double?): Result =
         request("/ops/shipments/${encode(shipmentId)}/open", JSONObject()
-            .put("storage_domain", zone).put("opening_temperature_c", temperatureC).toString())
+            .put("storage_domain", zone).put("opening_temperature_c", temperatureC ?: JSONObject.NULL).toString())
 
     fun receiveShipmentLine(
         shipmentId: String,
@@ -295,13 +309,13 @@ class ApiClient {
     fun adhocStowShipmentItem(
         shipmentId: String, eventId: String, productId: String,
         destinationLocationId: String, qty: Int, expiresOn: String?,
-        lotCode: String?, reason: String,
+        lotCode: String?, reason: String?,
     ): Result = request(
-        "/ops/shipments/${encode(shipmentId)}/adhoc-stow",
+        "/ops/shipments/${encode(shipmentId)}/direct-stow",
         JSONObject().put("event_id", eventId).put("product_id", productId)
             .put("destination_location_id", destinationLocationId).put("qty", qty)
             .put("expires_on", expiresOn ?: JSONObject.NULL)
-            .put("lot_code", lotCode ?: JSONObject.NULL).put("reason", reason).toString(),
+            .put("lot_code", lotCode ?: JSONObject.NULL).put("reason", reason ?: JSONObject.NULL).toString(),
     )
 
     fun getStowRecommendations(taskId: String): Result =
@@ -410,10 +424,23 @@ class ApiClient {
             targetStowMinutes = root.optInt("target_stow_minutes", 0),
             elapsedMinutes = if (root.has("elapsed_minutes") && !root.isNull("elapsed_minutes")) root.getInt("elapsed_minutes") else null,
             stowOverdue = root.optBoolean("stow_overdue", false),
+            supplierName = root.optString("supplier_name").takeIf { !root.isNull("supplier_name") },
+            purchaseOrderRef = root.optString("purchase_order_ref").takeIf { !root.isNull("purchase_order_ref") },
+            openingTemperatureC = if (root.isNull("opening_temperature_c")) null else root.optDouble("opening_temperature_c"),
+            receivingUsers = root.optJSONArray("receiving_users")?.let { array ->
+                (0 until array.length()).map { array.getString(it) }
+            }.orEmpty(),
+            issues = root.optJSONArray("issues")?.mapObjects { issue ->
+                ShipmentIssueSummary(issue.getString("id"), issue.getString("issue_type"),
+                    issue.optInt("qty"), issue.optString("notes"), issue.optString("status"),
+                    issue.optString("title").takeIf { !issue.isNull("title") }, issue.optString("reported_by"))
+            }.orEmpty(),
             lines = root.optJSONArray("lines")?.mapObjects { line ->
                 ShipmentLineSummary(
                     id = line.getString("id"),
                     productId = line.getString("product_id"),
+                    title = line.optString("title", line.getString("product_id")),
+                    barcode = line.optString("barcode").takeIf { !line.isNull("barcode") },
                     expectedQty = line.optInt("expected_qty", 0),
                     receivedQty = line.optInt("received_qty", 0),
                     damagedQty = line.optInt("damaged_qty", 0),

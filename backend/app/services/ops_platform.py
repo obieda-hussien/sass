@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
+import secrets
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 
@@ -10,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     AttendanceEntry,
+    Barcode,
     Device,
     EmployeeProfile,
     InventoryBalance,
@@ -42,6 +45,8 @@ from ..models_ops import (
     ReplenishmentTask,
     Shipment,
     ShipmentLine,
+    ShipmentIssue,
+    ShipmentScanReceipt,
     ShiftSession,
     StowTask,
     WorkerQualification,
@@ -1629,11 +1634,15 @@ def create_shipment(
     lines: list[dict[str, Any]],
     created_by_user_id: str,
     target_stow_minutes: int | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Shipment:
     domain = storage_domain.strip().upper()
     if domain not in SHIPMENT_DOMAINS:
         raise OpsError("Unsupported storage domain", "BAD_STORAGE_DOMAIN")
-    if db.scalar(select(Shipment).where(Shipment.label == label.strip().upper())):
+    label = label.strip().upper() or f"IN-{now_utc():%y%m%d}-{secrets.token_hex(4).upper()}"
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9._/-]{2,47}", label):
+        raise OpsError("Use 3–48 letters, digits, dash, dot, slash or underscore for the shipment code", "BAD_SHIPMENT_CODE")
+    if db.scalar(select(Shipment).where(Shipment.label == label)):
         raise OpsError("Shipment label already exists", "SHIPMENT_EXISTS")
 
     default_target = 30 if domain in {"CHILLED", "FROZEN"} else 120
@@ -1648,11 +1657,23 @@ def create_shipment(
     db.flush()
 
     expected_total = 0
+    seen_products = set()
     for spec in lines:
-        product_id = str(spec["product_id"])
+        product_id = str(spec["product_id"]).strip()
+        product = db.get(Product, product_id) or db.scalar(select(Product).where(Product.asin == product_id))
+        if product is None:
+            barcode = db.scalar(select(Barcode).where(Barcode.code == product_id))
+            product = db.get(Product, barcode.product_id) if barcode else None
+        if product is None or not product.active:
+            raise OpsError(f"Unknown or inactive product {product_id}", "PRODUCT_NOT_FOUND")
+        product_id = product.id
+        if product_id in seen_products:
+            raise OpsError("Merge duplicate product rows before creating the shipment", "DUPLICATE_PRODUCT")
+        seen_products.add(product_id)
         expected = max(0, int(spec.get("expected_qty", 0)))
-        if db.get(Product, product_id) is None:
-            raise OpsError(f"Unknown product {product_id}", "PRODUCT_NOT_FOUND")
+        temp, handling = _shipment_temp_handling(domain)
+        if product.temperature_class != temp or product.handling_class != handling:
+            raise OpsError(f"{product.title} belongs in {product.temperature_class}/{product.handling_class}", "ZONE_MISMATCH")
         db.add(ShipmentLine(
             shipment_id=shipment.id,
             product_id=product_id,
@@ -1662,6 +1683,11 @@ def create_shipment(
         ))
         expected_total += expected
     shipment.expected_units = expected_total
+    for key, value in (metadata or {}).items():
+        if key in {"supplier_name", "purchase_order_ref", "order_date", "delivery_from", "delivery_to", "shipping_address", "notes"}:
+            setattr(shipment, key, value)
+    if shipment.delivery_from and shipment.delivery_to and shipment.delivery_from > shipment.delivery_to:
+        raise OpsError("Delivery window end precedes its start", "BAD_DELIVERY_WINDOW")
     db.flush()
     return shipment
 
@@ -1690,11 +1716,16 @@ def open_shipment_receiving(
         raise OpsError("Selected zone does not match the shipment's declared storage domain", "ZONE_MISMATCH")
     if opening_temperature_c is None and shipment.opening_temperature_c is None:
         raise OpsError("Record the current temperature before opening", "TEMPERATURE_REQUIRED")
-    if db.get(ActivePickLease, user_id):
+    if db.get(ActivePickLease, user_id) or _active_pick_for_user(db, user_id):
         raise OpsError("Worker has an active pick order", "ACTIVE_PICK_EXISTS")
     user = db.get(User, user_id)
     if not user:
         raise OpsError("Worker not found", "WORKER_NOT_FOUND")
+    state = get_worker_state(db, user_id)
+    if state.state in DISPATCH_BLOCKING_STATES and not (
+        state.state.startswith("RECEIVING") and state.activity_ref == shipment.id
+    ):
+        raise OpsError("Finish the current activity before receiving", "WORKER_BUSY")
 
     existing = db.scalar(
         select(ReceivingSession).where(
@@ -1704,6 +1735,9 @@ def open_shipment_receiving(
         )
     )
     if existing:
+        existing.device_id = device_id
+        set_worker_state(db, user_id, f"RECEIVING_{shipment.storage_domain}",
+                         activity_ref=shipment.id, reason="REJOIN_SHIPMENT_RECEIVING")
         return existing
 
     temp, handling = _shipment_temp_handling(shipment.storage_domain)
@@ -1748,6 +1782,15 @@ def open_shipment_receiving(
     return session
 
 
+def _shipment_receipt(db: Session, operation: str, event_id: str, payload: dict[str, Any]) -> tuple[str, str, bool]:
+    key = hashlib.sha256(f"{operation}:{event_id}".encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+    old = db.get(ShipmentScanReceipt, key)
+    if old and old.payload_hash != digest:
+        raise OpsError("Scan event ID was reused with different contents", "EVENT_CONFLICT")
+    return key, digest, old is not None
+
+
 def receive_shipment_line(
     db: Session,
     *,
@@ -1763,6 +1806,11 @@ def receive_shipment_line(
 ) -> dict[str, Any]:
     if good_qty < 0 or damaged_qty < 0 or good_qty + damaged_qty <= 0:
         raise OpsError("Received quantity must be positive", "BAD_QUANTITY")
+    receipt_key, digest, recorded = _shipment_receipt(db, "RECEIVE", event_id, {
+        "shipment": shipment.id, "user": session.user_id, "product": product_id,
+        "good": good_qty, "damaged": damaged_qty, "lot": (lot_code or "").strip().upper(),
+        "expiry": expires_on, "reason": (discrepancy_reason or "").strip(),
+    })
     old_good = db.scalar(select(InventoryMovement).where(
         InventoryMovement.event_id == f"shipment-good:{event_id}")) if good_qty else None
     old_damage = db.scalar(select(InventoryMovement).where(
@@ -1782,6 +1830,8 @@ def receive_shipment_line(
                 "received_good": old_line.received_qty, "received_damaged": old_line.damaged_qty}
     if session.status != "OPEN" or shipment.status != "RECEIVING":
         raise OpsError("Receiving session is not open", "SESSION_CLOSED")
+    if good_qty and expires_on and expires_on < now_utc().date():
+        raise OpsError("Report expired stock through Issues instead of receiving it as good", "EXPIRED_STOCK")
     line = db.scalar(
         select(ShipmentLine).where(ShipmentLine.shipment_id == shipment.id, ShipmentLine.product_id == product_id)
     )
@@ -1883,6 +1933,8 @@ def receive_shipment_line(
             lot.qty += good_qty
             if expires_on:
                 lot.expires_on = expires_on
+        if not recorded:
+            db.add(ShipmentScanReceipt(event_key=receipt_key, shipment_id=shipment.id, payload_hash=digest))
     db.flush()
     return {
         "duplicate": duplicate,
@@ -1941,10 +1993,15 @@ def recommend_stow_locations(db: Session, shipment: Shipment, product_id: str, l
 def adhoc_stow_shipment_item(
     db: Session, *, shipment: Shipment, session: ReceivingSession, event_id: str,
     product_id: str, destination_location_id: str, qty: int, expires_on: date | None,
-    lot_code: str | None, reason: str,
+    lot_code: str | None, reason: str | None,
 ) -> dict[str, Any]:
-    if qty <= 0 or not reason.strip():
-        raise OpsError("Quantity and discrepancy reason are required", "BAD_ADHOC_STOW")
+    if qty <= 0:
+        raise OpsError("Quantity must be positive", "BAD_ADHOC_STOW")
+    receipt_key, digest, recorded = _shipment_receipt(db, "DIRECT_STOW", event_id, {
+        "shipment": shipment.id, "user": session.user_id, "product": product_id,
+        "destination": destination_location_id, "qty": qty,
+        "lot": (lot_code or "").strip().upper(), "expiry": expires_on, "reason": (reason or "").strip(),
+    })
     movement_id = "shipment-adhoc:" + hashlib.sha256(
         f"{shipment.id}:{event_id}".encode("utf-8")
     ).hexdigest()
@@ -1970,22 +2027,28 @@ def adhoc_stow_shipment_item(
                        code or "INCOMPATIBLE_DESTINATION")
     if expires_on and expires_on < now_utc().date():
         raise OpsError("Expired stock cannot go to a sellable bin", "EXPIRED_STOCK")
+    if not destination_has_capacity(db, destination_location_id, qty):
+        raise OpsError("Destination bin has insufficient capacity", "CAPACITY_EXCEEDED")
 
+    line = db.scalar(select(ShipmentLine).where(
+        ShipmentLine.shipment_id == shipment.id, ShipmentLine.product_id == product_id))
+    unexpected = line is None or line.received_qty + line.damaged_qty + qty > line.expected_qty
+    if unexpected and not (reason or "").strip():
+        raise OpsError("Unexpected or excess stock needs a discrepancy reason", "DISCREPANCY_REASON_REQUIRED")
     try:
         move_inventory(db, event_id=movement_id, product_id=product_id, qty=qty,
                        source_location_id=None, destination_location_id=destination_location_id,
                        reason="SHIPMENT_ADHOC_STOW", user_id=session.user_id, device_id=session.device_id)
     except InventoryError as exc:
         raise OpsError(str(exc), "INVENTORY_CONFLICT") from exc
-    line = db.scalar(select(ShipmentLine).where(
-        ShipmentLine.shipment_id == shipment.id, ShipmentLine.product_id == product_id))
     if line is None:
         line = ShipmentLine(shipment_id=shipment.id, product_id=product_id, expected_qty=0,
                             received_qty=0, damaged_qty=0, missing_qty=0, adhoc_stowed_qty=0)
         db.add(line)
     line.received_qty += qty
     line.adhoc_stowed_qty += qty
-    line.discrepancy_reason = reason.strip()
+    if unexpected:
+        line.discrepancy_reason = reason.strip()
     shipment.received_units += qty
     if lot_code:
         line.lot_code = lot_code.strip().upper()
@@ -2004,6 +2067,8 @@ def adhoc_stow_shipment_item(
         lot.qty += qty
         if expires_on:
             lot.expires_on = expires_on
+    if not recorded:
+        db.add(ShipmentScanReceipt(event_key=receipt_key, shipment_id=shipment.id, payload_hash=digest))
     db.flush()
     return {"duplicate": False, "destination_zone": domain_for_location(destination),
             "shipment": shipment_payload(db, shipment)}
@@ -2040,8 +2105,14 @@ def complete_receiving(db: Session, shipment: Shipment, session: ReceivingSessio
     shipment.status = "STOWING" if any(line.received_qty > line.adhoc_stowed_qty for line in lines) else "COMPLETED"
     if shipment.status == "COMPLETED":
         shipment.completed_at = now_utc()
-    session.status = "COMPLETED"
-    session.completed_at = now_utc()
+    participants = db.scalars(select(ReceivingSession).where(
+        ReceivingSession.shipment_id == shipment.id, ReceivingSession.status == "OPEN")).all()
+    for participant in participants:
+        participant.status = "COMPLETED"
+        participant.completed_at = now_utc()
+        state = get_worker_state(db, participant.user_id)
+        if participant.user_id != session.user_id and state.activity_ref == shipment.id:
+            set_worker_state(db, participant.user_id, "AVAILABLE", reason="SHARED_RECEIVING_CLOSED")
     if shipment.status == "COMPLETED":
         set_worker_state(db, session.user_id, "AVAILABLE", reason="RECEIVE_AND_STOW_COMPLETE", force=True)
     else:
@@ -2164,9 +2235,77 @@ def complete_stow_task(
     }
 
 
+SHIPMENT_ISSUE_TYPES = {"DAMAGED", "EXPIRED", "WRONG_ITEM", "MISSING", "TEMPERATURE", "PACKAGING", "OTHER"}
+
+
+def shipment_issue_payload(db: Session, issue: ShipmentIssue) -> dict[str, Any]:
+    product = db.get(Product, issue.product_id) if issue.product_id else None
+    reporter = db.get(User, issue.user_id)
+    return {
+        "id": issue.id, "shipment_id": issue.shipment_id, "product_id": issue.product_id,
+        "title": product.title if product else None, "issue_type": issue.issue_type,
+        "qty": issue.qty, "notes": issue.notes, "status": issue.status,
+        "lot_code": issue.lot_code, "expires_on": issue.expires_on.isoformat() if issue.expires_on else None,
+        "reported_by": reporter.username if reporter else issue.user_id,
+        "created_at": issue.created_at.isoformat(), "resolution": issue.resolution,
+        "resolved_at": issue.resolved_at.isoformat() if issue.resolved_at else None,
+    }
+
+
+def report_shipment_issue(
+    db: Session, *, shipment: Shipment, event_id: str, product_id: str | None,
+    issue_type: str, qty: int, notes: str, user_id: str, device_id: str,
+    lot_code: str | None = None, expires_on: date | None = None,
+) -> dict[str, Any]:
+    kind = issue_type.strip().upper()
+    notes = notes.strip()
+    lot_code = (lot_code or "").strip().upper() or None
+    if kind not in SHIPMENT_ISSUE_TYPES or len(notes) < 3 or qty < 0:
+        raise OpsError("Choose an issue type, quantity and a clear note", "BAD_SHIPMENT_ISSUE")
+    old = db.scalar(select(ShipmentIssue).where(ShipmentIssue.event_id == event_id))
+    if old:
+        if (old.shipment_id, old.product_id, old.issue_type, old.qty, old.notes, old.lot_code, old.expires_on, old.user_id) != (
+            shipment.id, product_id, kind, qty, notes, lot_code, expires_on, user_id
+        ):
+            raise OpsError("Issue event ID was reused with different contents", "EVENT_CONFLICT")
+        return {"duplicate": True, "issue": shipment_issue_payload(db, old), "shipment": shipment_payload(db, shipment)}
+    if shipment.status in {"COMPLETED", "CANCELLED"}:
+        raise OpsError("Shipment is closed", "SESSION_CLOSED")
+    if product_id and not db.get(Product, product_id):
+        raise OpsError("Unknown product", "PRODUCT_NOT_FOUND")
+    if kind in {"DAMAGED", "EXPIRED", "WRONG_ITEM", "MISSING", "PACKAGING"} and (not product_id or qty <= 0):
+        raise OpsError("Scan the affected item and enter its quantity", "ISSUE_ITEM_REQUIRED")
+    # Damaged/expired reports are receipts of rejected units, not deductions
+    # from good stock. One issue event produces at most one DMG movement.
+    if kind in {"DAMAGED", "EXPIRED"}:
+        session = db.scalar(select(ReceivingSession).where(
+            ReceivingSession.shipment_id == shipment.id, ReceivingSession.user_id == user_id,
+            ReceivingSession.device_id == device_id, ReceivingSession.status == "OPEN"))
+        if not session:
+            raise OpsError("Join receiving before recording rejected stock", "NO_OPEN_RECEIVING_SESSION")
+        receive_shipment_line(db, shipment=shipment, session=session,
+            event_id=f"issue:{shipment.id}:{event_id}", product_id=product_id,
+            good_qty=0, damaged_qty=qty, lot_code=lot_code, expires_on=expires_on,
+            discrepancy_reason=f"{kind}: {notes}"[:240])
+    issue = ShipmentIssue(shipment_id=shipment.id, event_id=event_id, product_id=product_id,
+        issue_type=kind, qty=qty, notes=notes, user_id=user_id, device_id=device_id,
+        lot_code=lot_code, expires_on=expires_on)
+    db.add(issue)
+    db.flush()
+    enqueue_outbox(db, topic="shipment.issue.reported", aggregate_type="SHIPMENT",
+                   aggregate_id=shipment.id, payload=shipment_issue_payload(db, issue))
+    return {"duplicate": False, "issue": shipment_issue_payload(db, issue), "shipment": shipment_payload(db, shipment)}
+
+
 def shipment_payload(db: Session, shipment: Shipment) -> dict[str, Any]:
     lines = db.scalars(select(ShipmentLine).where(ShipmentLine.shipment_id == shipment.id)).all()
     stow_tasks = db.scalars(select(StowTask).where(StowTask.shipment_id == shipment.id)).all()
+    products = {p.id: p for p in db.scalars(select(Product).where(Product.id.in_([line.product_id for line in lines]))).all()}
+    barcodes = {}
+    for barcode in db.scalars(select(Barcode).where(Barcode.product_id.in_(list(products))).order_by(Barcode.code)).all():
+        barcodes.setdefault(barcode.product_id, barcode.code)
+    issues = db.scalars(select(ShipmentIssue).where(ShipmentIssue.shipment_id == shipment.id).order_by(ShipmentIssue.created_at.desc())).all()
+    sessions = db.scalars(select(ReceivingSession).where(ReceivingSession.shipment_id == shipment.id, ReceivingSession.status == "OPEN")).all()
     expected = shipment.expected_units
     accounted = sum(min(line.expected_qty, line.received_qty + line.damaged_qty) for line in lines)
     stowed = sum(task.qty for task in stow_tasks if task.status == "COMPLETED") + sum(line.adhoc_stowed_qty for line in lines)
@@ -2177,6 +2316,18 @@ def shipment_payload(db: Session, shipment: Shipment) -> dict[str, Any]:
     return {
         "id": shipment.id,
         "label": shipment.label,
+        "barcode_value": shipment.label,
+        "supplier_name": shipment.supplier_name,
+        "purchase_order_ref": shipment.purchase_order_ref,
+        "order_date": shipment.order_date.isoformat() if shipment.order_date else None,
+        "delivery_from": shipment.delivery_from.isoformat() if shipment.delivery_from else None,
+        "delivery_to": shipment.delivery_to.isoformat() if shipment.delivery_to else None,
+        "shipping_address": shipment.shipping_address,
+        "notes": shipment.notes,
+        "open_issues": sum(issue.status == "OPEN" for issue in issues),
+        "issues": [shipment_issue_payload(db, issue) for issue in issues],
+        "receiving_users": [s.user_id for s in sessions],
+        "opened_at": shipment.opened_at.isoformat() if shipment.opened_at else None,
         "shipment_type": shipment.shipment_type,
         "storage_domain": shipment.storage_domain,
         "status": shipment.status,
@@ -2202,6 +2353,9 @@ def shipment_payload(db: Session, shipment: Shipment) -> dict[str, Any]:
             {
                 "id": line.id,
                 "product_id": line.product_id,
+                "title": products[line.product_id].title if line.product_id in products else line.product_id,
+                "asin": products[line.product_id].asin if line.product_id in products else None,
+                "barcode": barcodes.get(line.product_id),
                 "expected_qty": line.expected_qty,
                 "received_qty": line.received_qty,
                 "damaged_qty": line.damaged_qty,

@@ -657,6 +657,29 @@ export async function getShipments(token: string) {
   );
 }
 
+export type ShipmentCreate = {
+  label?: string;
+  shipment_type: string;
+  storage_domain: string;
+  supplier_name?: string | null;
+  purchase_order_ref?: string | null;
+  order_date?: string | null;
+  delivery_from?: string | null;
+  delivery_to?: string | null;
+  shipping_address?: string | null;
+  notes?: string | null;
+  lines: Array<{ product_id: string; expected_qty: number; expires_on?: string | null; lot_code?: string | null }>;
+};
+
+export async function createShipment(token: string, payload: ShipmentCreate) {
+  return jsonRequest<Record<string, any>>("/ops/shipments", { method: "POST", body: JSON.stringify(payload) }, token);
+}
+
+export async function resolveShipmentIssue(token: string, shipmentId: string, issueId: string, resolution: string) {
+  return jsonRequest<Record<string, any>>(`/ops/shipments/${encodeURIComponent(shipmentId)}/issues/${encodeURIComponent(issueId)}/resolve`,
+    { method: "POST", body: JSON.stringify({ resolution }) }, token);
+}
+
 export async function managerCloseReceiving(token: string, shipmentId: string) {
   return jsonRequest<Record<string, any>>(
     `/ops/shipments/${encodeURIComponent(shipmentId)}/manager-close-receive`,
