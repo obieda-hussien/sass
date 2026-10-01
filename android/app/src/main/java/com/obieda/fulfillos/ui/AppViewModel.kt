@@ -170,7 +170,10 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
 
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
-            if (appForeground && authenticated && session?.mustChangePassword != true) sendHeartbeat()
+            if (appForeground && authenticated && session?.mustChangePassword != true) {
+                sendHeartbeat()
+                if (screen == AppScreen.RECEIVE && !busy && connectivity == ConnectivityState.ONLINE) refreshSelectedShipment()
+            }
             main.postDelayed(this, heartbeatIntervalMs)
         }
     }
@@ -1201,6 +1204,7 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 if (updated != null) {
                     selectedShipment = updated
                     receivingJoined = true
+                    workerState = "RECEIVING_${updated.storageDomain}"
                     errorMessage = null
                     message = if (updated.status == "STOWING") {
                         "Stow ${updated.label} • scan destination"
@@ -1348,6 +1352,8 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                 busy = false
                 if (updated != null) {
                     selectedShipment = updated
+                    receivingJoined = false
+                    workerState = if (updated.status == "COMPLETED") "AVAILABLE" else "STOWING"
                     message = "Receiving complete • stow tasks ready"
                     requestCameraForCurrentContext()
                 } else {
@@ -1379,15 +1385,30 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         }
     }
 
+    private var shipmentRefreshInFlight = false
+
     private fun refreshSelectedShipment() {
         val id = selectedShipment?.id ?: return
+        if (shipmentRefreshInFlight) return
+        shipmentRefreshInFlight = true
         worker.execute {
             val response = callWithRefresh { graph.api.getShipment(id) }
             val updated = if (response.ok) runCatching { graph.api.parseShipment(response.body) }.getOrNull() else null
+            val stateResponse = if (response.ok) callWithRefresh { graph.api.getWorkerState() } else null
+            val updatedState = stateResponse?.takeIf { it.ok }?.let { graph.api.parseWorkerState(it.body) }
             ui {
+                shipmentRefreshInFlight = false
                 if (updated != null && selectedShipment?.id == id) {
                     selectedShipment = updated
-                    if (updated.status != "RECEIVING") receivingJoined = false
+                    updatedState?.let { workerState = it }
+                    val stillJoined = updated.status == "RECEIVING" && session?.userId in updated.receivingUsers
+                    if (receivingJoined && !stillJoined) {
+                        receiveProduct = null
+                        receiveAdhocDestination = ""
+                        shipmentIssueVisible = false
+                        message = "Shipment receiving changed • server synced"
+                    }
+                    receivingJoined = receivingJoined && stillJoined
                 }
             }
         }
@@ -1415,7 +1436,10 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
             val response = callWithRefresh { graph.api.leaveShipment(shipment.id) }
             ui {
                 busy = false
-                if (response.ok) { clearSelectedShipment(); loadShipments() }
+                if (response.ok) {
+                    if (workerState.startsWith("RECEIVING")) workerState = "AVAILABLE"
+                    clearSelectedShipment(); loadShipments()
+                }
                 else errorMessage = graph.api.parseConflictMessage(response.body)
             }
         }
@@ -1426,17 +1450,18 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
         if (busy || !validReceiveDate()) return
         val qty = shipmentIssueQty.toIntOrNull() ?: 0
         val notes = shipmentIssueNotes.trim()
+        val issueType = shipmentIssueType
         val productId = receiveProduct?.productId
-        if (notes.length < 3 || (shipmentIssueType !in listOf("TEMPERATURE", "OTHER") && (productId == null || qty <= 0))) {
+        if (notes.length < 3 || (issueType !in listOf("TEMPERATURE", "OTHER") && (productId == null || qty <= 0))) {
             errorMessage = "Scan the affected item, enter its quantity and describe the issue"
             return
         }
-        val eventId = inboundEvent(listOf("issue", shipment.id, productId, shipmentIssueType, qty, notes,
+        val eventId = inboundEvent(listOf("issue", shipment.id, productId, issueType, qty, notes,
             receiveLotInput, receiveExpiryInput)) ?: return
         busy = true
         worker.execute {
             val response = callWithRefresh { graph.api.reportShipmentIssue(shipment.id, eventId,
-                productId, shipmentIssueType, qty, notes, receiveLotInput.trim().ifBlank { null },
+                productId, issueType, qty, notes, receiveLotInput.trim().ifBlank { null },
                 receiveExpiryInput.trim().ifBlank { null }) }
             val updated = if (response.ok) runCatching {
                 graph.api.parseShipment(org.json.JSONObject(response.body).getJSONObject("shipment").toString())
@@ -1451,6 +1476,14 @@ class AppViewModel(private val graph: AppGraph) : ViewModel() {
                     shipmentIssueQty = "1"
                     errorMessage = null
                     message = "Issue recorded • rejected units stay out of sellable stock"
+                    if (issueType in listOf("DAMAGED", "EXPIRED", "WRONG_ITEM")) {
+                        receiveProduct = null
+                        receiveAdhocDestination = ""
+                        receiveGoodQtyInput = "1"
+                        receiveLotInput = ""
+                        receiveExpiryInput = ""
+                        requestCameraScan("Scan next received product barcode")
+                    }
                 } else errorMessage = graph.api.parseConflictMessage(response.body)
             }
         }
