@@ -29,17 +29,32 @@ Receiving can capture:
 - lot;
 - expiry.
 
-The PDA opens a shipment after the worker confirms its declared storage zone and
-records a current temperature in °C. Each received item is checked against
-the shipment's temperature and handling domain. Unexpected or excess units
-need a discrepancy reason. An ad hoc direct-stow mode scans the item barcode,
-then a compatible destination bin, and records quantity, lot and expiry before
-one atomic inventory movement. Regular received stock remains in inbound
-until its stow task is scanned. A manager can
-close an open receipt with a shortfall, preserving the expected, received,
-damaged, missing and stowed quantities per item. The Operations dashboard
-shows separate receipt and putaway percentages, so an item received but still
-in the inbound location is not reported as stowed.
+The manager creates a shipment in Operations → Inbound with expected product
+barcodes/SKUs, quantities, supplier and purchase-order details. Its automatic
+or custom code appears in a printable Code 128 manifest. Any signed-in PDA
+employee scans that header barcode to identify it, confirms its declared zone
+and measured temperature, and explicitly joins receiving. Other employees may
+join the same open shipment; leaving a session does not close the shipment.
+Breaks, active picks and other blocking activities must finish first.
+
+Direct stow scans item → compatible bin → quantity, lot and expiry → confirm.
+Planned quantities need no reason; unexpected/excess stock does. Bin capacity,
+zone and expiry are checked before an atomic inventory movement. Receive-then-
+stow remains available for stock that first enters the inbound location.
+
+The **Issues** action records damaged/expired units in `DMG` with an idempotent
+receipt and links an auditable incident. Wrong item, missing, temperature,
+packaging and other incidents do not automatically change inventory. Use
+Issues before including rejected stock in the good quantity; reporting damaged
+stock means receiving rejected incoming units, not deducting previously stowed
+stock. Operations displays open issues and lets a manager record resolution.
+
+Regular finishing requires all expected quantities to be accounted for. A
+manager can close a partial receipt and record missing units. Closing finishes
+all receivers' sessions, releases other workers and assigns remaining putaway
+to the closing worker. Operations shows separate receipt/putaway percentages,
+so inbound stock is never reported as stowed. Retry IDs are persisted on PDA;
+the backend binds full receipt payloads and locks shipment mutations.
 
 For returned orders with several SPOO bags, scanning any one SPOO loads the
 picked manifest of the **whole order** for the selected temperature class.

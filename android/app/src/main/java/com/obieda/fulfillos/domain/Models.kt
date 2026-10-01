@@ -208,6 +208,18 @@ data class ShipmentLineSummary(
     val damagedQty: Int,
     val missingQty: Int,
     val recommendedStow: List<String>,
+    val title: String = productId,
+    val barcode: String? = null,
+)
+
+data class ShipmentIssueSummary(
+    val id: String,
+    val issueType: String,
+    val qty: Int,
+    val notes: String,
+    val status: String,
+    val title: String?,
+    val reportedBy: String,
 )
 
 data class StowTaskSummary(
@@ -233,6 +245,11 @@ data class ShipmentSummary(
     val stowOverdue: Boolean,
     val lines: List<ShipmentLineSummary>,
     val stowTasks: List<StowTaskSummary>,
+    val supplierName: String? = null,
+    val purchaseOrderRef: String? = null,
+    val openingTemperatureC: Double? = null,
+    val issues: List<ShipmentIssueSummary> = emptyList(),
+    val receivingUsers: List<String> = emptyList(),
 )
 
 data class ReplenishmentSummary(

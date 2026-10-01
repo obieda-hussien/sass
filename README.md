@@ -6,18 +6,17 @@ The project is reliability-first: PostgreSQL owns transactional truth, client ac
 
 ## Current status
 
-_Status snapshot: 28 September 2026._
+_Status snapshot: 1 October 2026._
 
-The open [PR #30](https://github.com/obieda-hussien/sass/pull/30) adds direct
-employee management, PDA activity and icon-first navigation. Its inbound
-follow-up now binds a multi-bag SPOO scan to the complete order manifest,
-records receiving-zone temperature and unplanned-stock reasons, and gives
-managers item-level shortfall and putaway progress with a partial-close action.
+[PR #30](https://github.com/obieda-hussien/sass/pull/30) is merged: direct employee
+management, PDA activities, icon navigation, order-wide unpack and inbound
+tracking are now on `main`. The v0.5.2 inbound extension adds scannable shipment
+codes, printable manifests, shared receiving and an audited Issues workflow.
 
 | Component | Current state |
 | --- | --- |
-| FulfillOS release | **v0.5.1** |
-| Android | Kotlin + Jetpack Compose, versionCode **7**, minSdk 26, targetSdk 36 |
+| FulfillOS release | **v0.5.2** |
+| Android | Kotlin + Jetpack Compose, versionCode **8**, minSdk 26, targetSdk 36 |
 | API | FastAPI + SQLAlchemy |
 | Primary database | PostgreSQL / Neon |
 | Schema management | **Alembic** with safe pre-Alembic baseline + startup migration runner |
@@ -29,7 +28,41 @@ managers item-level shortfall and putaway progress with a partial-close action.
 | Production API | https://fulfillos-nine.vercel.app/api |
 | Release line | FulfillOS v0.5 UX/realtime/security hardening |
 
-The latest `main` build/deploy checks are green. Production deployment validates `/api/health`, PostgreSQL connectivity, telemetry connectivity, the web root, and then builds production-connected Android APK artifacts.
+PR #30 passed backend, Control Tower and Android CI before merging. Production deployment validates `/api/health`, PostgreSQL connectivity, telemetry connectivity, the web root, and then builds production-connected Android APK artifacts.
+
+## v0.5.2 shipment barcode & Issues
+
+- **Create:** Operations → Inbound → Create shipment. Add supplier, purchase
+  order, dates, delivery window, address and expected item quantities. Items can
+  be entered using their barcode, SKU/ASIN or product ID. Blank shipment codes
+  generate a unique `IN-YYMMDD-XXXXXXXX` code; custom codes such as `4ZOXV48Q`
+  are accepted. Duplicate products and incompatible storage zones are rejected.
+- **Print:** Barcode & shipment sheet opens an Arabic/English manifest with a
+  Code 128 barcode, item names/barcodes, planned/received/rejected quantities,
+  and dates. Print it or use the browser's Save PDF option.
+- **Open:** Any authenticated warehouse employee can list, identify and open
+  a shipment from the PDA's camera, hardware scanner or manual entry. Barcode
+  lookup queries the server directly, including shipments outside the recent
+  list. Creation, issue resolution and partial closure stay manager-controlled;
+  HAZ/HRV execution retains its qualification checks.
+- **Share:** Workers explicitly join receiving and can leave without closing
+  the shipment. Breaks, active picking and other blocking activities cannot be
+  overwritten. Closing receiving finishes all open sessions and releases the
+  other receivers from dispatch-blocking states.
+- **Stow:** Scan item → compatible bin → quantity / lot / expiry → confirm.
+  Planned direct stow needs no discrepancy reason; excess/unplanned quantities
+  do. A date picker avoids ambiguous expiry entry. Expired goods cannot enter
+  sellable stock, and direct stow checks bin compatibility and capacity.
+- **Issues:** Damaged, expired, wrong item, missing, temperature, packaging and
+  other incidents carry a reporter, device, quantity, notes and timestamp.
+  Damaged/expired reports receive rejected units into `DMG` once; other incident
+  types do not change inventory. Managers record a resolution in Operations.
+- **Reliability:** Mutating shipment routes lock the shipment row, inventory
+  receipt IDs bind the complete scan payload, and the PDA persists its pending
+  retry identity across process restarts. Normal finishing rejects incomplete
+  manifests; managers can close a partial receipt and record missing stock.
+- **Upgrade:** Alembic revision `20261001_0009` adds manifest metadata,
+  shipment issues and scan receipt records. Android versionCode is **8**.
 
 ## v0.5.1 scanner & presence patch
 
@@ -430,7 +463,7 @@ GitHub Actions currently validates:
 - production web root;
 - production-connected Android artifacts.
 
-The production APK artifact name is generated from Gradle version metadata, e.g. `FulfillOS-v0.5.1-production-apks`.
+The production APK artifact name is generated from Gradle version metadata, e.g. `FulfillOS-v0.5.2-production-apks`.
 
 ## What remains
 

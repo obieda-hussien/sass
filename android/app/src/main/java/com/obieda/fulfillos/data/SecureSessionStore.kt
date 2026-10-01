@@ -61,5 +61,21 @@ class SecureSessionStore(context: Context) {
     fun getUsername(): String? = prefs.getString("username", null)
     fun getDeviceId(): String? = prefs.getString("device_id", null)
 
+    fun inboundEvent(signature: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(signature.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        val saved = prefs.getString("inbound_event", null)
+        if (prefs.getString("inbound_signature", null) == digest && saved != null) return saved
+        val eventId = java.util.UUID.randomUUID().toString()
+        check(prefs.edit().putString("inbound_signature", digest).putString("inbound_event", eventId).commit()) {
+            "Could not persist inbound retry identity"
+        }
+        return eventId
+    }
+
+    fun clearInboundEvent() {
+        prefs.edit().remove("inbound_signature").remove("inbound_event").commit()
+    }
+
     fun clear() = prefs.edit().clear().apply()
 }

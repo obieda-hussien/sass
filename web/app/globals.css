@@ -1281,3 +1281,51 @@ select option {
     grid-template-columns: 1fr;
   }
 }
+
+.shipmentCreate { margin: 16px 0 24px; padding: 18px; border: 1px solid var(--border, #ddd); border-radius: 16px; }
+.shipmentCreate fieldset { margin: 0; padding: 0; border: 0; }
+.shipmentFormGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.shipmentFormGrid label, .shipmentLineForm label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.shipmentFormGrid input, .shipmentFormGrid select, .shipmentLineForm input { width: 100%; min-width: 0; }
+.shipmentLineForm { display: grid; grid-template-columns: 2fr .65fr 1fr 1fr auto; gap: 10px; align-items: end; padding: 12px 0; border-bottom: 1px solid #ddd; }
+.shipmentFormActions, .shipmentCreated { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+.shipmentIssues article { margin-top: 12px; border-left: 3px solid #8e8de5; padding-left: 12px; }
+.shipmentIssues input { width: 100%; margin: 10px 0; }
+.manifestBackdrop { position: fixed; inset: 0; z-index: 100; background: #18132ac9; overflow: auto; padding: 24px; }
+.manifestContainer { max-width: 1050px; margin: auto; }
+.manifestActions { display: flex; gap: 10px; padding: 12px; background: #fff; border-radius: 12px 12px 0 0; position: sticky; top: 0; }
+.manifestSheet { background: #fff; color: #111; padding: 32px; border-radius: 0 0 12px 12px; overflow-x: auto; }
+.manifestSheet header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; }
+.manifestSheet h1 { font-size: 24px; color: #111; }
+.shipmentBarcode { margin: 0; width: 360px; max-width: 100%; flex-shrink: 0; }
+.shipmentBarcode svg { display: block; width: 100%; height: 90px; }
+.shipmentBarcode figcaption { text-align: center; font-family: monospace; letter-spacing: 2px; padding-top: 8px; }
+.manifestMeta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 28px 0; }
+.manifestMeta dt { color: #555; font-size: 13px; }
+.manifestMeta dd { margin: 6px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.manifestSheet table { width: 100%; border-collapse: collapse; font-size: 13px; color: #111; }
+.manifestSheet th, .manifestSheet td { border: 1px solid #999; padding: 9px; text-align: start; }
+.manifestSheet th { background: #f1f1f1; }
+.manifestSheet footer { margin-top: 24px; color: #555; font-size: 12px; }
+@media (max-width: 720px) {
+  .shipmentFormGrid, .manifestMeta { grid-template-columns: 1fr; }
+  .shipmentLineForm { grid-template-columns: 1fr 1fr; }
+  .shipmentLineForm label:first-child { grid-column: 1 / -1; }
+  .manifestBackdrop { padding: 8px; }
+  .manifestSheet { padding: 18px; }
+}
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body:has(#shipment-print-sheet) { background: white; }
+  body:has(#shipment-print-sheet) * { visibility: hidden; }
+  #shipment-print-sheet, #shipment-print-sheet * { visibility: visible; }
+  .manifestBackdrop { position: absolute; inset: 0; overflow: visible; padding: 0; background: white; }
+  .manifestContainer { max-width: none; }
+  #shipment-print-sheet { padding: 0; border-radius: 0; overflow: visible; }
+  .manifestActions { display: none; }
+  .manifestMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .manifestSheet header { break-inside: avoid; }
+  .manifestSheet thead { display: table-header-group; }
+  .manifestSheet tr { break-inside: avoid; }
+  .manifestSheet th, .manifestSheet td { font-size: 10px; padding: 5px; }
+}

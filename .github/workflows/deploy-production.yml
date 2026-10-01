@@ -136,7 +136,7 @@ jobs:
 
           if ! jq -e '
             .ok == true and
-            .version == "0.5.1" and
+            .version == "0.5.2" and
             .database == "connected" and
             .telemetry == "connected"
           ' /tmp/health.json; then

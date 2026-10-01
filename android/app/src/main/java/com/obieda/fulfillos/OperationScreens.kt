@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -471,10 +472,64 @@ fun RecoveryScreen(vm: AppViewModel) {
 }
 
 @Composable
+private fun ReceiveExpiryField(vm: AppViewModel) {
+    val context = LocalContext.current
+    OutlinedTextField(
+        value = vm.receiveExpiryInput,
+        onValueChange = { vm.receiveExpiryInput = it.take(10) },
+        label = { Text("Expiry date (optional)") },
+        placeholder = { Text("YYYY-MM-DD") },
+        enabled = !vm.busy,
+        modifier = Modifier.fillMaxWidth(),
+        trailingIcon = {
+            IconButton(onClick = {
+                val date = runCatching { java.time.LocalDate.parse(vm.receiveExpiryInput) }.getOrDefault(java.time.LocalDate.now())
+                android.app.DatePickerDialog(context, { _, year, month, day ->
+                    vm.receiveExpiryInput = java.time.LocalDate.of(year, month + 1, day).toString()
+                }, date.year, date.monthValue - 1, date.dayOfMonth).show()
+            }, enabled = !vm.busy) { Icon(Icons.Filled.CalendarMonth, contentDescription = "Choose expiry date") }
+        },
+    )
+}
+
+@Composable
+private fun ShipmentIssueDialog(vm: AppViewModel) {
+    AlertDialog(
+        onDismissRequest = { if (!vm.busy) vm.shipmentIssueVisible = false },
+        title = { Text("Shipment issue") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(vm.receiveProduct?.title ?: "Scan the affected item first for item-specific issues. Temperature and Other can describe the whole shipment.")
+                listOf(listOf("DAMAGED", "EXPIRED"), listOf("WRONG_ITEM", "MISSING"), listOf("TEMPERATURE", "PACKAGING"), listOf("OTHER")).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { kind -> FilterChip(selected = vm.shipmentIssueType == kind,
+                            onClick = { vm.shipmentIssueType = kind }, enabled = !vm.busy,
+                            label = { Text(kind.lowercase().replace('_', ' ')) }) }
+                    }
+                }
+                OutlinedTextField(value = vm.shipmentIssueQty, onValueChange = { vm.shipmentIssueQty = it.filter(Char::isDigit).take(5) },
+                    label = { Text("Affected quantity") }, enabled = !vm.busy,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                ReceiveExpiryField(vm)
+                OutlinedTextField(value = vm.shipmentIssueNotes, onValueChange = { vm.shipmentIssueNotes = it.take(1000) },
+                    label = { Text("Describe the problem") }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth())
+                Text("Damaged and expired reports record rejected incoming units in DMG. Other issues record an incident without changing inventory.", style = MaterialTheme.typography.bodySmall)
+                vm.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = { TextButton(onClick = vm::submitShipmentIssue, enabled = !vm.busy) { Text("Report issue") } },
+        dismissButton = { TextButton(onClick = { vm.shipmentIssueVisible = false }, enabled = !vm.busy) { Text("Cancel") } },
+    )
+}
+
+@Composable
 fun ReceiveScreen(vm: AppViewModel) {
     OperationPage("Receive & Stow", "Vendor / ambient / chilled / frozen / HAZ / HRV inbound execution.", vm) {
         val selected = vm.selectedShipment
+        if (vm.shipmentIssueVisible) ShipmentIssueDialog(vm)
         if (selected == null) {
+            ScanEntry(vm, "Scan the barcode at the top of the shipment sheet, or enter its code.", enabled = !vm.busy)
+            Text("Any signed-in employee can identify and open a shipment.", style = MaterialTheme.typography.bodySmall)
             Button(onClick = vm::loadShipments, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Filled.Refresh, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
@@ -493,44 +548,56 @@ fun ReceiveScreen(vm: AppViewModel) {
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(selected.label, fontWeight = FontWeight.Bold)
+                    selected.supplierName?.let { Text("Supplier: $it") }
+                    selected.purchaseOrderRef?.let { Text("Purchase order: $it") }
+                    Text("${selected.receivingUsers.size} employees receiving · ${selected.issues.count { it.status == "OPEN" }} open issues")
                     Text("${selected.storageDomain} · ${selected.status}")
                     Text("${selected.receivedUnits}/${selected.expectedUnits} good · ${selected.damagedUnits} damaged · ${selected.missingUnits} missing")
                     if (selected.stowOverdue) Text("Stow SLA overdue", color = MaterialTheme.colorScheme.error)
                 }
             }
-            if (selected.status == "CREATED" || selected.status == "DOCKED") {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { vm.shipmentIssueVisible = true }, enabled = !vm.busy && selected.status !in listOf("COMPLETED", "CANCELLED")) {
+                    Icon(Icons.Filled.ReportProblem, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Issues")
+                }
+                TextButton(onClick = vm::leaveSelectedReceiving, enabled = !vm.busy) { Text("Leave shipment") }
+            }
+            if (selected.status == "CREATED" || selected.status == "DOCKED" || (selected.status == "RECEIVING" && !vm.receivingJoined)) {
                 Text("Shipment zone: ${selected.storageDomain}. Confirm the physical receiving zone.")
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("AMBIENT", "CHILLED", "FROZEN").forEach { zone ->
                         FilterChip(selected = vm.receiveZoneInput == zone,
-                            onClick = { vm.receiveZoneInput = zone }, label = { Text(zone) })
+                            onClick = { vm.receiveZoneInput = zone }, enabled = !vm.busy, label = { Text(zone) })
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("PRODUCE", "HAZ", "HRV").forEach { zone ->
                         FilterChip(selected = vm.receiveZoneInput == zone,
-                            onClick = { vm.receiveZoneInput = zone }, label = { Text(zone) })
+                            onClick = { vm.receiveZoneInput = zone }, enabled = !vm.busy, label = { Text(zone) })
                     }
                 }
                 OutlinedTextField(
                     value = vm.receiveTemperatureInput,
+                            enabled = !vm.busy,
                     onValueChange = { vm.receiveTemperatureInput = it.filter { c -> c.isDigit() || c == '-' || c == '.' }.take(7) },
                     label = { Text("Current temperature °C") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(onClick = vm::openSelectedShipment, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-                    Text("Open shipment in ${vm.receiveZoneInput}")
+                    Text(if (selected.status == "RECEIVING") "Join receiving" else "Open shipment in ${vm.receiveZoneInput}")
                 }
             }
-            if (selected.status == "RECEIVING") {
+            if (selected.status == "RECEIVING" && vm.receivingJoined) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = !vm.receiveAdhocMode,
-                        onClick = { vm.chooseReceiveAdhocMode(false) },
-                        label = { Text("Planned receipt") })
+                        onClick = { vm.chooseReceiveAdhocMode(false) }, enabled = !vm.busy,
+                        label = { Text("Receive then stow") })
                     FilterChip(selected = vm.receiveAdhocMode,
-                        onClick = { vm.chooseReceiveAdhocMode(true) },
-                        label = { Text("Ad hoc direct stow") })
+                        onClick = { vm.chooseReceiveAdhocMode(true) }, enabled = !vm.busy,
+                        label = { Text("Direct stow") })
                 }
                 vm.receiveProduct?.let { product ->
                     Text(product.title, fontWeight = FontWeight.Bold)
@@ -540,11 +607,12 @@ fun ReceiveScreen(vm: AppViewModel) {
                     if (vm.receiveAdhocMode) {
                         OutlinedTextField(
                             value = vm.receiveAdhocDestination,
+                            enabled = !vm.busy,
                             onValueChange = { vm.receiveAdhocDestination = it.uppercase() },
                             label = { Text("Scan destination bin") },
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        Button(onClick = vm::checkAdhocPlacement, modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = vm::checkAdhocPlacement, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
                             Text("Check bin zone")
                         }
                         if (vm.receivePlacementHint.isNotBlank()) Text(vm.receivePlacementHint)
@@ -555,42 +623,40 @@ fun ReceiveScreen(vm: AppViewModel) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = vm.receiveGoodQtyInput,
+                            enabled = !vm.busy,
                             onValueChange = { vm.receiveGoodQtyInput = it.filter(Char::isDigit).take(5) },
-                            label = { Text("Good") },
+                            label = { Text("Quantity") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.weight(1f),
                         )
-                        OutlinedTextField(
-                            value = vm.receiveDamagedQtyInput,
-                            onValueChange = { vm.receiveDamagedQtyInput = it.filter(Char::isDigit).take(5) },
-                            label = { Text("Damaged") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f),
-                        )
+
                     }
                     OutlinedTextField(
                         value = vm.receiveLotInput,
+                            enabled = !vm.busy,
                         onValueChange = { vm.receiveLotInput = it },
                         label = { Text("Lot code (optional)") },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    OutlinedTextField(
-                        value = vm.receiveExpiryInput,
-                        onValueChange = { vm.receiveExpiryInput = it },
-                        label = { Text("Expiry YYYY-MM-DD (optional)") },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    ReceiveExpiryField(vm)
                     OutlinedTextField(
                         value = vm.receiveDiscrepancyInput,
+                            enabled = !vm.busy,
                         onValueChange = { vm.receiveDiscrepancyInput = it.take(240) },
                         label = { Text("Reason for unexpected / excess item") },
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    OutlinedButton(onClick = { vm.shipmentIssueVisible = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Filled.ReportProblem, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Issues · damaged / expired / wrong item")
+                    }
                     Button(onClick = if (vm.receiveAdhocMode) vm::submitAdhocStow else vm::submitReceiveLine,
+                        enabled = !vm.busy,
                         modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Filled.Save, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text(if (vm.receiveAdhocMode) "Confirm ad hoc stow" else "Record")
+                        Text(if (vm.receiveAdhocMode) "Confirm stow" else "Record")
                     }
                 }
                 ScanEntry(vm, if (vm.receiveAdhocMode && vm.receiveProduct != null) "Scan destination bin."
@@ -610,7 +676,7 @@ fun ReceiveScreen(vm: AppViewModel) {
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("${task.productId.take(12)} · ${task.qty} units", fontWeight = FontWeight.Bold)
+                            Text("${selected.lines.firstOrNull { it.productId == task.productId }?.title ?: task.productId.take(12)} · ${task.qty} units", fontWeight = FontWeight.Bold)
                             val line = selected.lines.firstOrNull { it.productId == task.productId }
                             if (line?.recommendedStow?.isNotEmpty() == true) {
                                 Text("Recommended: ${line.recommendedStow.take(3).joinToString()}", style = MaterialTheme.typography.bodySmall)
@@ -646,6 +712,22 @@ fun ReceiveScreen(vm: AppViewModel) {
                 Icon(Icons.Filled.ArrowBack, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("Shipments")
+            }
+            if (selected.lines.isNotEmpty()) {
+                Text("Shipment items", style = MaterialTheme.typography.titleMedium)
+                selected.lines.forEach { line ->
+                    Text("${line.title} · ${line.receivedQty + line.damagedQty}/${line.expectedQty} accounted · ${line.damagedQty} rejected", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            selected.issues.take(10).forEach { issue ->
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("${issue.issueType} · ${issue.qty} · ${issue.status}", fontWeight = FontWeight.Bold)
+                        issue.title?.let { Text(it) }
+                        Text(issue.notes)
+                        Text("By ${issue.reportedBy}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
         }
     }

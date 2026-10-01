@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ShipmentCreateForm, ShipmentManifestButton, ShipmentIssues } from "./ShipmentWorkspace";
 import {
   createAvailabilityHold,
   directAssignTask,
@@ -467,14 +468,18 @@ export default function OperationsPage() {
 
       <section id="inbound" className="panel opsSection">
         <div className="panelHeading"><div><p className="eyebrow">INBOUND</p><h2>Shipment & stow pipeline</h2></div><span className="chip">{activeShipments.length} active</span></div>
+        <ShipmentCreateForm token={token} onCreated={() => refresh(token)} />
         <div className="shipmentGrid">{shipments.map((shipment) => <article className="shipmentCard" key={String(shipment.id)}>
           <div><strong>{String(shipment.label)}</strong><small>{String(shipment.shipment_type)} · {String(shipment.storage_domain)} · {shipment.opening_temperature_c == null ? "temperature pending" : `${Number(shipment.opening_temperature_c)}°C`}</small></div>
           <span className={`statePill state-${stateClass(String(shipment.status))}`}>{String(shipment.status)}</span>
+          <p>{shipment.supplier_name || "Supplier pending"} · {shipment.receiving_users?.length || 0} employees receiving</p>
+          <ShipmentManifestButton shipment={shipment} />
+          <ShipmentIssues token={token} shipment={shipment} onResolved={() => refresh(token)} />
           <div className="shipmentStats"><span>Expected {Number(shipment.expected_units)}</span><span>Received {Number(shipment.received_units)}</span><span>Damaged {Number(shipment.damaged_units)}</span><span>Still expected {Number(shipment.remaining_expected_units)}</span><span>Stowed {Number(shipment.stowed_units)} / {Number(shipment.received_units)}</span></div>
           <p>Receipt {Number(shipment.receive_percent)}% · Putaway {Number(shipment.stow_percent)}%</p>
           <details><summary>Item discrepancies and putaway</summary>
             <ul>{(shipment.lines || []).map((line: Record<string, any>) => <li key={String(line.id)}>
-              {String(line.product_id)}: expected {Number(line.expected_qty)}, received {Number(line.received_qty)}, damaged {Number(line.damaged_qty)}, missing {Number(line.remaining_expected_qty)}
+              {String(line.title || line.product_id)}: expected {Number(line.expected_qty)}, received {Number(line.received_qty)}, damaged {Number(line.damaged_qty)}, missing {Number(line.remaining_expected_qty)}
               {line.discrepancy_reason && ` · extra/unplanned: ${String(line.discrepancy_reason)}`}
             </li>)}</ul>
           </details>

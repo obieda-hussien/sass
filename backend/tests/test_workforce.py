@@ -71,7 +71,7 @@ def test_employee_payroll_and_password_recovery(db):
                 occurred_at=datetime(2026, 9, 10, 18, 0, tzinfo=timezone.utc),
             ),
         )
-        add_pay_adjustment(
+        adjustment = add_pay_adjustment(
             db,
             employee.id,
             PayAdjustmentCreateRequest(
@@ -82,6 +82,8 @@ def test_employee_payroll_and_password_recovery(db):
             ),
             manager.id,
         )
+        # This historical payroll fixture must not depend on the month CI runs.
+        adjustment.created_at = datetime(2026, 9, 10, 18, 0, tzinfo=timezone.utc)
 
     preview = payroll_preview(db, employee.id, "2026-09")
     assert preview["late_minutes"] == 7
