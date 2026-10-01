@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   ACCESS_COOKIE,
+  CSRF_COOKIE,
+  newCsrfToken,
+  setCsrfCookie,
   backendFetch,
   clearSessionCookies,
   refreshWebSession,
@@ -30,13 +33,16 @@ export async function GET(request: NextRequest) {
   }
 
   const body = await upstream.json();
+  const csrfToken = request.cookies.get(CSRF_COOKIE)?.value || newCsrfToken();
   const result = NextResponse.json({
     authenticated: true,
+    csrf_token: csrfToken,
     user_id: body.user_id,
     username: body.username,
     role: body.role,
     device_id: body.device_id,
-  });
-  if (refreshed) setSessionCookies(result, refreshed);
+  }, { headers: { "Cache-Control": "no-store" } });
+  if (refreshed) setSessionCookies(result, refreshed, csrfToken);
+  else setCsrfCookie(result, csrfToken);
   return result;
 }

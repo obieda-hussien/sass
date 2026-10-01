@@ -141,6 +141,21 @@ function browserCookie(name: string): string | null {
   return null;
 }
 
+let csrfRecovery: Promise<string> | null = null;
+
+async function recoverCsrfToken(): Promise<string> {
+  // Share recovery between simultaneous actions in the same tab.
+  if (!csrfRecovery) {
+    csrfRecovery = (async () => {
+      const session = await getWebSession();
+      if (!session.authenticated) throw new Error("Your session has expired. Sign in again; your form has been kept.");
+      return session.csrf_token;
+    })();
+  }
+  try { return await csrfRecovery; }
+  finally { csrfRecovery = null; }
+}
+
 async function jsonRequest<T>(
   path: string,
   init: RequestInit = {},
@@ -149,24 +164,32 @@ async function jsonRequest<T>(
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
   const method = (init.method ?? "GET").toUpperCase();
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
-    const csrf = browserCookie("fo_csrf");
-    if (csrf) headers.set("X-CSRF-Token", csrf);
-  }
+  const mutation = !["GET", "HEAD", "OPTIONS"].includes(method);
+  if (mutation) headers.set("X-CSRF-Token", browserCookie("fo_csrf") || await recoverCsrfToken());
   const normalized = path.startsWith("/") ? path : `/${path}`;
-  const response = await fetch(`/web-api${normalized}`, {
+  const send = () => fetch(`/web-api${normalized}`, {
     ...init,
     headers,
     credentials: "same-origin",
     cache: "no-store",
   });
-  const body = await response.json().catch(() => ({}));
+  let response = await send();
+  let body = await response.json().catch(() => ({}));
+  // This specific rejection happens before forwarding any mutation to FastAPI.
+  // Never replay a request after a network failure or an ordinary backend error.
+  if (mutation && response.status === 403 && body?.detail?.code === "CSRF_REJECTED") {
+    headers.set("X-CSRF-Token", await recoverCsrfToken());
+    response = await send();
+    body = await response.json().catch(() => ({}));
+  }
   if (!response.ok) {
     const detail = body?.detail;
     const message =
-      typeof detail === "string"
-        ? detail
-        : detail?.message ?? body?.message ?? `Request failed: ${response.status}`;
+      detail?.code === "CSRF_REJECTED"
+        ? "Session protection could not be renewed. Reload the page and sign in again."
+        : typeof detail === "string"
+          ? detail
+          : detail?.message ?? body?.message ?? `Request failed: ${response.status}`;
     throw new Error(message);
   }
   return body as T;
@@ -206,6 +229,7 @@ export async function getWebSession() {
   if (!response.ok) return { authenticated: false as const };
   return response.json() as Promise<{
     authenticated: true;
+    csrf_token: string;
     user_id: string;
     username: string;
     role: string;
@@ -655,6 +679,23 @@ export async function getShipments(token: string) {
     {},
     token,
   );
+}
+
+export type CatalogProduct = {
+  id: string; sku: string; title: string; active: boolean;
+  temperature_class: string; handling_class: string; barcodes: string[];
+};
+
+export async function lookupCatalogProduct(token: string, identifier: string) {
+  return jsonRequest<{ found: boolean; product: CatalogProduct | null }>(`/ops/catalog/lookup?identifier=${encodeURIComponent(identifier)}`, {}, token);
+}
+
+export async function registerCatalogProduct(token: string, payload: { barcode: string; sku: string; title: string; storage_domain: string }) {
+  return jsonRequest<CatalogProduct>("/ops/catalog/register", { method: "POST", body: JSON.stringify(payload) }, token);
+}
+
+export async function activateCatalogProduct(token: string, productId: string) {
+  return jsonRequest<CatalogProduct>(`/ops/catalog/products/${encodeURIComponent(productId)}/activate`, { method: "POST", body: "{}" }, token);
 }
 
 export type ShipmentCreate = {

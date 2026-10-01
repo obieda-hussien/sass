@@ -1658,14 +1658,14 @@ def create_shipment(
 
     expected_total = 0
     seen_products = set()
-    for spec in lines:
+    for line_number, spec in enumerate(lines, start=1):
         product_id = str(spec["product_id"]).strip()
         product = db.get(Product, product_id) or db.scalar(select(Product).where(Product.asin == product_id))
         if product is None:
             barcode = db.scalar(select(Barcode).where(Barcode.code == product_id))
             product = db.get(Product, barcode.product_id) if barcode else None
         if product is None or not product.active:
-            raise OpsError(f"Unknown or inactive product {product_id}", "PRODUCT_NOT_FOUND")
+            raise OpsError(f"Item {line_number}: {product_id} is not registered or is inactive. Use Check / register item to register its name and SKU, link its barcode, or activate the existing product.", "PRODUCT_NOT_FOUND")
         product_id = product.id
         if product_id in seen_products:
             raise OpsError("Merge duplicate product rows before creating the shipment", "DUPLICATE_PRODUCT")

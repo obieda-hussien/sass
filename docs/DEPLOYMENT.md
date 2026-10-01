@@ -183,7 +183,10 @@ v0.5 manager authentication uses the Next.js BFF:
 - cookies use `SameSite=Strict` and `Secure` in production;
 - unsafe mutations require CSRF validation;
 - browser JavaScript never reads the FastAPI bearer credential;
-- server-side refresh rotates the web session when needed.
+- server-side refresh rotates the web session when needed; an expired access cookie can use a still-valid refresh cookie;
+- authenticated session checks restore a missing CSRF cookie, preserve an existing token and return uncached responses;
+- CSRF cookies last as long as the refresh session (14 days);
+- mutations rejected by the BFF with `CSRF_REJECTED` recover their token and retry once, before any backend write; network failures and backend errors are not replayed.
 
 Production should terminate TLS at the hosting layer and preserve same-site cookie behavior for the web/BFF origin.
 

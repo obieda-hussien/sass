@@ -18,7 +18,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   if (!SAFE_METHODS.has(method) && !csrfMatches(request)) {
     return NextResponse.json(
       { detail: { code: "CSRF_REJECTED", message: "CSRF token missing or invalid." } },
-      { status: 403 },
+      { status: 403, headers: { "Cache-Control": "no-store" } },
     );
   }
 
@@ -27,6 +27,11 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const upstreamPath = suffix + query;
 
   let accessToken = request.cookies.get(ACCESS_COOKIE)?.value ?? "";
+  let refreshed = null;
+  if (!accessToken) {
+    refreshed = await refreshWebSession(request);
+    accessToken = refreshed?.access_token ?? "";
+  }
   if (!accessToken) {
     const denied = NextResponse.json({ detail: "Authentication required" }, { status: 401 });
     clearSessionCookies(denied);
@@ -41,8 +46,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     headers: contentType ? { "Content-Type": contentType } : undefined,
   });
 
-  let refreshed = null;
-  if (upstream.status === 401) {
+  if (upstream.status === 401 && !refreshed) {
     refreshed = await refreshWebSession(request);
     if (refreshed) {
       accessToken = refreshed.access_token;

@@ -38,12 +38,17 @@ The browser manager UI does not expose FastAPI bearer credentials to JavaScript.
 ## Catalog, locations and inventory
 
 ```text
+GET  /ops/catalog/lookup?identifier={barcode-or-sku-or-id}
+POST /ops/catalog/register
+POST /ops/catalog/products/{product_id}/activate
 GET  /locations/parse/{location}
 GET  /inventory/product/{asin}
 GET  /inventory/location/{location}
 POST /inventory/receive
 POST /inventory/move
 ```
+
+Catalog lookup is available to authenticated employees; registration and activation require `operations.manage`. Registration accepts `barcode`, `sku`, optional `title` and `storage_domain`. A new SKU requires a real name. An existing active SKU links another barcode without changing its name or storage rules. Barcodes cannot be reassigned; repeated registration is idempotent. Catalog writes are audited and do not receive inventory.
 
 Operational inventory routes also expose alerts, cycle-count escalation and fulfillment-orderability information.
 
