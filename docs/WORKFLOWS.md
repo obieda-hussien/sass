@@ -30,7 +30,12 @@ Receiving can capture:
 - expiry.
 
 The manager creates a shipment in Operations → Inbound with expected product
-barcodes/SKUs, quantities, supplier and purchase-order details. Its automatic
+barcodes/SKUs, quantities, supplier and purchase-order details. **Check / register
+item** checks each barcode before creation. For an unknown barcode, enter the
+real product name and a unique SKU, or an existing SKU to link the barcode. An
+inactive product requires explicit manager activation. Catalog registration
+does not receive stock. A missing-product error identifies the affected row.
+Its automatic
 or custom code appears in a printable Code 128 manifest. Any signed-in PDA
 employee scans that header barcode to identify it, confirms its declared zone
 and measured temperature, and explicitly joins receiving. Other employees may

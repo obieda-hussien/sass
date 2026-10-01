@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from .database import get_db
 from .models import Device, EmployeeProfile, Location, PickTask, PickTaskItem, Product, User
@@ -31,6 +32,7 @@ from .models_ops import (
 )
 from .security import authenticate_access
 from .services.compatibility import storage_compatible
+from .services.catalog import lookup_product, product_payload, register_product, activate_product
 from .services.ops_optimization import (
     create_cycle_count_from_alert,
     create_warehouse_node,
@@ -229,6 +231,13 @@ class PayrollPolicyRequest(BaseModel):
     late_deduction_cents_per_minute: int = Field(default=0, ge=0)
     early_leave_deduction_cents_per_minute: int = Field(default=0, ge=0)
     auto_apply_attendance_deductions: bool = False
+
+
+class CatalogRegisterRequest(BaseModel):
+    barcode: str = Field(min_length=1, max_length=80)
+    sku: str = Field(min_length=1, max_length=24)
+    title: str | None = Field(default=None, max_length=240)
+    storage_domain: str = "AMBIENT"
 
 
 class ShipmentLineInput(BaseModel):
@@ -1402,6 +1411,33 @@ def alert_create_cycle_count(
             }
     except ValueError as exc:
         raise HTTPException(409, str(exc))
+
+
+@router.get("/ops/catalog/lookup")
+def catalog_lookup(identifier: str = Query(min_length=1, max_length=120), who=Depends(ops_actor), db: Session = Depends(get_db)):
+    product = lookup_product(db, identifier)
+    return {"found": product is not None, "product": product_payload(db, product) if product else None}
+
+
+@router.post("/ops/catalog/register")
+def catalog_register(req: CatalogRegisterRequest, who=Depends(ops_manager), db: Session = Depends(get_db)):
+    try:
+        with db.begin():
+            product = register_product(db, **req.model_dump(), manager_id=who[0].id)
+            return product_payload(db, product)
+    except OpsError as exc:
+        fail(exc)
+    except IntegrityError:
+        raise HTTPException(409, {"code": "CATALOG_CONFLICT", "message": "Another manager registered this SKU or barcode. Check the item again."})
+
+
+@router.post("/ops/catalog/products/{product_id}/activate")
+def catalog_activate(product_id: str, who=Depends(ops_manager), db: Session = Depends(get_db)):
+    with db.begin():
+        product = db.scalar(select(Product).where(Product.id == product_id).with_for_update())
+        if product is None:
+            raise HTTPException(404, "Product not found")
+        return product_payload(db, activate_product(db, product, who[0].id))
 
 
 @router.post("/ops/shipments")

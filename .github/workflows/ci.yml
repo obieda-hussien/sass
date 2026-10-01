@@ -40,6 +40,8 @@ jobs:
         run: npm install
       - name: Typecheck
         run: npm run lint
+      - name: Web session regression tests
+        run: npm test
       - name: Build
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:8080

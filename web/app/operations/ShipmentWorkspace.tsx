@@ -1,12 +1,63 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { createShipment, resolveShipmentIssue } from "../../lib/api";
+import { createShipment, resolveShipmentIssue, lookupCatalogProduct, registerCatalogProduct, activateCatalogProduct, type CatalogProduct } from "../../lib/api";
 import { shipmentBarcode } from "../../lib/shipment-barcode";
 
 type Shipment = Record<string, any>;
 const zones = ["AMBIENT", "CHILLED", "FROZEN", "PRODUCE", "HAZ", "HRV"];
 const blankLine = () => ({ product_id: "", expected_qty: "1", expires_on: "", lot_code: "" });
+
+function ShipmentDateField({ label, value, onChange, min }: { label: string; value: string; onChange: (value: string) => void; min?: string }) {
+  const selected = value ? new Date(`${value}T00:00:00`) : null;
+  const readable = selected && !Number.isNaN(selected.getTime())
+    ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric" }).format(selected)
+    : "Choose from the calendar";
+  return <label>{label}<input type="date" dir="ltr" value={value} min={min} onChange={(event) => onChange(event.target.value)} /><small className="shipmentDateHint">{readable}</small></label>;
+}
+
+function CatalogItemHelper({ token, identifier, storageDomain, onReady }: { token: string; identifier: string; storageDomain: string; onReady: () => void }) {
+  const [checked, setChecked] = useState("");
+  const [product, setProduct] = useState<CatalogProduct | null>(null);
+  const [sku, setSku] = useState("");
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const code = identifier.trim();
+  async function check() {
+    setBusy(true); setError(""); setChecked("");
+    try {
+      const result = await lookupCatalogProduct(token, code);
+      setProduct(result.product); setChecked(code); setSku(""); setTitle("");
+      if (result.product?.active) onReady();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not check item"); }
+    finally { setBusy(false); }
+  }
+  async function save(activate = false) {
+    setBusy(true); setError("");
+    try {
+      const result = activate && product
+        ? await activateCatalogProduct(token, product.id)
+        : await registerCatalogProduct(token, { barcode: code, sku: sku.trim(), title: title.trim(), storage_domain: storageDomain });
+      setProduct(result); onReady();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save product"); }
+    finally { setBusy(false); }
+  }
+  return <div className="catalogItemHelper">
+    <button type="button" disabled={busy || !code} onClick={() => void check()}>{busy ? "Checking / saving…" : "Check / register item"}</button>
+    {error && <p className="blockReason" role="alert">{error}</p>}
+    {checked === code && product && <div className="catalogResult"><strong dir="auto">{product.title}</strong><p>SKU: {product.sku} · {product.temperature_class}/{product.handling_class} · {product.active ? "Active" : "Inactive"}</p>
+      {!product.active && <button type="button" disabled={busy} onClick={() => void save(true)}>Activate this product</button>}
+    </div>}
+    {checked === code && !product && <div className="catalogRegistration">
+      <p>Barcode {code} is not registered. Enter the real item name and a SKU. An existing SKU links this barcode to that product without changing its name or storage rules.</p>
+      <label>Product SKU <input maxLength={24} value={sku} placeholder="Model / SKU number" onChange={(event) => setSku(event.target.value)} /></label>
+      <label>Product name <input maxLength={240} value={title} dir="auto" placeholder="Name on the product packaging" onChange={(event) => setTitle(event.target.value)} /></label>
+      <small>New product storage zone: {storageDomain}. Registration adds catalog information; stock is counted when received.</small>
+      <button type="button" disabled={busy || !sku.trim()} onClick={() => void save()}>Save product / link barcode</button>
+    </div>}
+  </div>;
+}
 
 function Barcode({ code }: { code: string }) {
   // Legacy labels may contain characters which cannot fit Code 128 B.
@@ -86,24 +137,24 @@ export function ShipmentCreateForm({ token, onCreated }: { token: string; onCrea
     {expanded && <form onSubmit={(event) => void submit(event)}><fieldset disabled={busy}>
       <div className="shipmentFormGrid">
         <label>Shipment code <input value={form.label} maxLength={48} onChange={(e) => update("label", e.target.value.toUpperCase())} placeholder="Automatic if blank · e.g. 4ZOXV48Q" /></label>
-        <label>Supplier <input value={form.supplier_name} maxLength={160} onChange={(e) => update("supplier_name", e.target.value)} /></label>
-        <label>Purchase order reference <input value={form.purchase_order_ref} maxLength={120} onChange={(e) => update("purchase_order_ref", e.target.value)} /></label>
+        <label>Supplier <input placeholder="Supplier name · e.g. QCD2" value={form.supplier_name} maxLength={160} onChange={(e) => update("supplier_name", e.target.value)} /></label>
+        <label>Purchase order reference <input placeholder="Number on the purchase order · e.g. 4ZOXV48Q" value={form.purchase_order_ref} maxLength={120} onChange={(e) => update("purchase_order_ref", e.target.value)} /></label>
         <label>Storage zone <select value={form.storage_domain} onChange={(e) => update("storage_domain", e.target.value)}>{zones.map((zone) => <option key={zone}>{zone}</option>)}</select></label>
         <label>Shipment type <select value={form.shipment_type} onChange={(e) => update("shipment_type", e.target.value)}>{["VENDOR", "TRANSFER", "RETURN"].map((kind) => <option key={kind}>{kind}</option>)}</select></label>
-        <label>Order date <input type="date" value={form.order_date} onChange={(e) => update("order_date", e.target.value)} /></label>
-        <label>Delivery from <input type="date" value={form.delivery_from} onChange={(e) => update("delivery_from", e.target.value)} /></label>
-        <label>Delivery to <input type="date" min={form.delivery_from || undefined} value={form.delivery_to} onChange={(e) => update("delivery_to", e.target.value)} /></label>
+        <ShipmentDateField label="Order date" value={form.order_date} onChange={(value) => update("order_date", value)} />
+        <ShipmentDateField label="Delivery from" value={form.delivery_from} onChange={(value) => update("delivery_from", value)} />
+        <ShipmentDateField label="Delivery to" min={form.delivery_from || undefined} value={form.delivery_to} onChange={(value) => update("delivery_to", value)} />
         <label>Shipping address <input value={form.shipping_address} maxLength={500} onChange={(e) => update("shipping_address", e.target.value)} /></label>
         <label>Notes <input value={form.notes} maxLength={1000} onChange={(e) => update("notes", e.target.value)} /></label>
       </div>
       <h3>Expected items</h3><p>Scan/type the product barcode, SKU or internal product ID. Each shipment covers one storage zone.</p>
-      {lines.map((line, index) => <div className="shipmentLineForm" key={index}>
+      {lines.map((line, index) => <div className="shipmentItemRow" key={index}><div className="shipmentLineForm">
         <label>Item barcode / SKU <input required value={line.product_id} onChange={(e) => setLines((current) => current.map((row, i) => i === index ? { ...row, product_id: e.target.value } : row))} /></label>
         <label>Quantity <input required type="number" min="1" step="1" value={line.expected_qty} onChange={(e) => setLines((current) => current.map((row, i) => i === index ? { ...row, expected_qty: e.target.value } : row))} /></label>
-        <label>Expiry <input type="date" value={line.expires_on} onChange={(e) => setLines((current) => current.map((row, i) => i === index ? { ...row, expires_on: e.target.value } : row))} /></label>
+        <ShipmentDateField label="Expiry" value={line.expires_on} onChange={(value) => setLines((current) => current.map((row, i) => i === index ? { ...row, expires_on: value } : row))} />
         <label>Lot <input value={line.lot_code} maxLength={80} onChange={(e) => setLines((current) => current.map((row, i) => i === index ? { ...row, lot_code: e.target.value } : row))} /></label>
         <button type="button" disabled={lines.length === 1} aria-label={`Remove item ${index + 1}`} onClick={() => setLines((current) => current.filter((_, i) => i !== index))}>×</button>
-      </div>)}
+      </div><CatalogItemHelper token={token} identifier={line.product_id} storageDomain={form.storage_domain} onReady={() => setError("")} /></div>)}
       <div className="shipmentFormActions"><button type="button" disabled={lines.length >= 500} onClick={() => setLines([...lines, blankLine()])}>+ Add item</button><button type="submit">{busy ? "Creating…" : "Create shipment & barcode"}</button></div>
     </fieldset></form>}
   </div>;

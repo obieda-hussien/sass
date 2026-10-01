@@ -32,7 +32,19 @@ export function csrfMatches(request: NextRequest): boolean {
   const cookie = request.cookies.get(CSRF_COOKIE)?.value ?? "";
   const header = request.headers.get("x-csrf-token") ?? "";
   if (!cookie || !header || cookie.length !== header.length) return false;
-  return timingSafeEqual(Buffer.from(cookie), Buffer.from(header));
+  const cookieBytes = Buffer.from(cookie);
+  const headerBytes = Buffer.from(header);
+  return cookieBytes.length === headerBytes.length && timingSafeEqual(cookieBytes, headerBytes);
+}
+
+export function setCsrfCookie(response: NextResponse, csrfToken: string): void {
+  response.cookies.set(CSRF_COOKIE, csrfToken, {
+    httpOnly: false,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+    maxAge: 14 * 24 * 60 * 60,
+  });
 }
 
 export function setSessionCookies(
@@ -55,13 +67,7 @@ export function setSessionCookies(
     path: "/",
     maxAge: 14 * 24 * 60 * 60,
   });
-  response.cookies.set(CSRF_COOKIE, csrfToken, {
-    httpOnly: false,
-    secure,
-    sameSite: "strict",
-    path: "/",
-    maxAge: 8 * 60 * 60,
-  });
+  setCsrfCookie(response, csrfToken);
 }
 
 export function clearSessionCookies(response: NextResponse): void {
